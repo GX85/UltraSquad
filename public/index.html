@@ -2,103 +2,187 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>UltraSquad</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>UltraSquad — сеть автономных агентов</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://d8j0ntlcm91z4.cloudfront.net">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<canvas id="bg"></canvas>
-<div class="app">
-  <aside class="side">
-    <div class="logo"><span class="bolt">⚡</span><b>Ultra</b>Squad</div>
-    <nav>
-      <a data-v="dash" class="on"><i>◈</i>Обзор</a>
-      <a data-v="agents"><i>✦</i>Агенты</a>
-      <a data-v="sec"><i>◉</i>Охота</a>
-      <a data-v="models"><i>⬡</i>Модели</a>
-    </nav>
-    <div class="side-foot">
-      <div class="pill" id="keyState"><span class="dot"></span><span>OpenRouter</span></div>
-      <div class="pill" id="live"><span class="dot"></span><span>Live</span></div>
-    </div>
-  </aside>
+<div class="hero" id="shell">
+  <div class="hero__media">
+    <video autoplay muted loop playsinline preload="auto"
+      poster="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260806_132328_5f9029c8-218f-4489-82b6-29ff2849920e.png"
+      src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260806_133255_956f653f-5d80-4b06-abd5-0f46c98b60fa.mp4"></video>
+  </div>
+  <div class="hero__scrim"></div>
 
-  <main>
-    <!-- ОБЗОР -->
-    <section id="dash" class="view on">
-      <h1>Командный центр</h1>
-      <div class="stats">
-        <div class="card stat"><small>Агентов онлайн</small><b data-c="agents">0</b></div>
-        <div class="card stat"><small>Угроз зафиксировано</small><b data-c="threats">0</b></div>
-        <div class="card stat"><small>IP в бане</small><b data-c="bans">0</b></div>
-        <div class="card stat"><small>RAM сервера</small><b data-c="mem">0</b><em>MB</em></div>
+  <header class="nav">
+    <a class="nav__logo" href="#">ULTRASQUAD</a>
+    <div class="nav__right">
+      <nav class="nav__links" aria-label="Разделы">
+        <a href="#live" data-nav="live">Эфир</a>
+        <a href="#graph" data-nav="graph">Граф</a>
+        <a href="#agents" data-nav="agents">Агенты</a>
+        <a href="#security" data-nav="security">Охота</a>
+        <a href="#models" data-nav="models">Модели</a>
+      </nav>
+      <a class="nav__cta only-hero" href="#live">Консоль</a>
+      <button class="nav__cta only-app" id="runBtn" type="button">Пауза</button>
+      <button class="nav__toggle" id="menuToggle" type="button" aria-expanded="false" aria-controls="mobileMenu" aria-label="Open menu"><span></span><span></span><span></span></button>
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <div class="hero__body" id="heroBody">
+    <div class="panel">
+      <span class="chip">[ Agent network ]</span>
+      <h1 class="panel__title">ULTRASQUAD</h1>
+      <p class="panel__tag">Автономные агенты. В прямом эфире.</p>
+      <div class="panel__form">
+        <p class="panel__stat" id="heroStat">Подключение…</p>
+        <a class="btn btn--solid" href="#live">Смотреть эфир</a>
       </div>
-      <div class="grid2">
-        <div class="card radar-card">
-          <h3>Радар угроз</h3>
-          <canvas id="radar" width="420" height="420"></canvas>
+      <a class="panel__ref" href="#graph">Граф сети</a>
+    </div>
+  </div>
+
+  <!-- КОНСОЛЬ -->
+  <main class="console" id="console">
+    <div class="strip">
+      <div class="strip__cell"><span>Агенты</span><b id="sAgents">0</b></div>
+      <div class="strip__cell"><span>В работе</span><b id="sActive">0</b></div>
+      <div class="strip__cell"><span>Страниц прочитано</span><b id="sPages">0</b></div>
+      <div class="strip__cell"><span>Запросы к модели · <i id="sLlmSub">сегодня</i></span><b id="sLlm">0/0</b></div>
+      <div class="strip__cell"><span>Статус</span><b class="status" id="sStatus"><i class="rec"></i><em>Эфир</em></b></div>
+    </div>
+
+    <!-- ЭФИР -->
+    <section class="view" id="v-live">
+      <div class="live">
+        <div class="live__main">
+          <div class="pane screen">
+            <div class="pane__head">
+              <div class="screen__who"><span class="chip chip--live"><i class="rec"></i>Live</span><b id="scrName">—</b><span class="dim" id="scrMode"></span></div>
+              <button class="link" id="followBtn" type="button">Авто-режиссёр</button>
+            </div>
+            <div class="screen__url"><span id="scrVerb">GET</span><span id="scrUrl">ожидание первого сигнала…</span></div>
+            <div class="screen__view" id="scrView">
+              <p class="screen__thought" id="scrThought"></p>
+              <h2 class="screen__title" id="scrTitle">Агенты выходят в сеть</h2>
+              <p class="screen__note" id="scrNote"></p>
+              <div class="screen__text" id="scrText"></div>
+              <div class="screen__list" id="scrList"></div>
+            </div>
+          </div>
+          <div class="tiles" id="tiles"></div>
         </div>
-        <div class="card">
-          <h3>Живая лента</h3>
-          <div id="feed" class="feed"></div>
+        <div class="pane feed">
+          <div class="pane__head"><span>Лента сети</span><span class="dim" id="feedCount">0</span></div>
+          <div class="feed__body" id="feed"></div>
         </div>
       </div>
-      <div class="card sys">
-        <h3>Система</h3>
-        <div class="bars" id="sysbars"></div>
+    </section>
+
+    <!-- ГРАФ -->
+    <section class="view" id="v-graph">
+      <div class="pane gpane">
+        <div class="pane__head"><span>Граф сети · агенты и сайты</span>
+          <span class="legend"><i class="lg lg--agent"></i>агент<i class="lg lg--busy"></i>в работе<i class="lg lg--site"></i>сайт</span></div>
+        <div class="gwrap"><canvas id="graph"></canvas><div class="gtip" id="gtip"></div></div>
       </div>
     </section>
 
     <!-- АГЕНТЫ -->
-    <section id="agents" class="view">
-      <div class="head"><h1>Агенты</h1><button class="btn" id="newAgent">＋ Новый агент</button></div>
-      <div id="agentGrid" class="agent-grid"></div>
+    <section class="view" id="v-agents">
+      <div class="pane apane">
+        <div class="pane__head">
+          <span>Отряд · <span id="aCount">0</span></span>
+          <div class="tools">
+            <input class="field field--sm" id="aSearch" placeholder="Поиск" aria-label="Поиск агента">
+            <input class="field field--num" id="spawnN" type="number" min="1" max="100" value="5" aria-label="Количество">
+            <select class="field field--sm" id="spawnT" aria-label="Специализация"></select>
+            <button class="btn btn--solid btn--sm" id="spawnBtn" type="button">Добавить</button>
+            <button class="btn btn--ghost btn--sm" id="customBtn" type="button">Свой агент</button>
+          </div>
+        </div>
+        <div class="rows" id="agentRows"></div>
+      </div>
     </section>
 
     <!-- ОХОТА -->
-    <section id="sec" class="view">
-      <div class="head"><h1>Охота на хакеров</h1>
-        <div><button class="btn ghost" id="sim">Имитировать атаку</button>
-        <button class="btn" id="hunt">🛡️ Запустить Sentinel</button></div></div>
-      <div class="grid2">
-        <div class="card"><h3>Ловушки и сигнатуры</h3>
-          <p class="muted">Сервер маскирует приманки (<code>/wp-login.php</code>, <code>/.env</code>, <code>/phpmyadmin</code>…), ловит сканеры, SQLi/XSS/path-traversal, флуд — и банит источник автоматически.</p>
-          <h3 style="margin-top:18px">Забаненные IP</h3><div id="banList" class="list"></div></div>
-        <div class="card"><h3>Вердикт Sentinel</h3><div id="verdict" class="verdict muted">Нажми «Запустить Sentinel», чтобы агент проанализировал журнал.</div></div>
+    <section class="view" id="v-security">
+      <div class="sec">
+        <div class="sec__col">
+          <div class="pane">
+            <div class="pane__head"><span>Вердикт Sentinel</span>
+              <div class="tools"><button class="btn btn--ghost btn--sm" id="simBtn" type="button">Имитация атаки</button><button class="btn btn--solid btn--sm" id="patrolBtn" type="button">Патруль</button></div></div>
+            <div class="pad"><p class="verdict" id="verdict">Сервер держит ловушки (/wp-login.php, /.env, /phpmyadmin…), ловит сканеры, SQL-инъекции, XSS и флуд. Источник банится сразу, а Sentinel разбирает журнал и выносит вердикт.</p></div>
+          </div>
+          <div class="pane grow">
+            <div class="pane__head"><span>Заблокированные IP</span><span class="dim" id="banCount">0</span></div>
+            <div class="rows" id="banRows"></div>
+          </div>
+        </div>
+        <div class="pane">
+          <div class="pane__head"><span>Журнал угроз</span><span class="dim" id="evCount">0</span></div>
+          <div class="rows" id="evRows"></div>
+        </div>
       </div>
-      <div class="card" style="margin-top:18px"><h3>Журнал событий</h3><div id="log" class="list"></div></div>
     </section>
 
     <!-- МОДЕЛИ -->
-    <section id="models" class="view">
-      <div class="head"><h1>Модели OpenRouter</h1><input id="mq" class="inp" placeholder="Поиск модели…"></div>
-      <div id="modelList" class="list models"></div>
+    <section class="view" id="v-models">
+      <div class="pane apane">
+        <div class="pane__head"><span>Бесплатные модели OpenRouter · <span id="mCount">0</span></span>
+          <div class="tools"><input class="field field--sm" id="mSearch" placeholder="Поиск модели" aria-label="Поиск модели"></div></div>
+        <p class="note" id="quotaNote"></p>
+        <div class="rows" id="modelRows"></div>
+      </div>
     </section>
   </main>
+
+  <footer class="legal">Агенты ходят по открытому интернету только на <a href="#models">бесплатных моделях</a> OpenRouter. Сервер работает локально на этом компьютере и <a href="#security">сам ловит атакующих</a>.</footer>
+</div>
+
+<!-- Мобильное меню -->
+<div class="menu" id="mobileMenu" role="dialog" aria-modal="true" aria-label="Site menu" aria-hidden="true" inert>
+  <a href="#live" style="--i:0">Эфир</a>
+  <a href="#graph" style="--i:1">Граф</a>
+  <a href="#agents" style="--i:2">Агенты</a>
+  <a href="#security" style="--i:3">Охота</a>
+  <a href="#models" class="menu__cta" style="--i:4">Модели</a>
 </div>
 
 <!-- Редактор агента -->
-<div class="modal" id="modal"><div class="sheet">
-  <div class="sheet-head"><h2 id="mTitle">Агент</h2><button class="x" id="mClose">✕</button></div>
-  <div class="form">
-    <div class="row"><label>Иконка<input id="fIcon" class="inp" maxlength="2"></label><label>Имя<input id="fName" class="inp"></label><label>Цвет<input id="fColor" type="color" class="inp"></label></div>
-    <label>Роль<input id="fRole" class="inp"></label>
-    <label>Модель<input id="fModel" class="inp" list="modelOpts"><datalist id="modelOpts"></datalist></label>
-    <label>Температура: <span id="tVal"></span><input id="fTemp" type="range" min="0" max="1.5" step="0.1"></label>
-    <label>Системный промпт<textarea id="fPrompt" class="inp" rows="4"></textarea></label>
-    <div><div class="lbl">Разрешения</div><div id="fPerms" class="perms"></div></div>
+<div class="modal" id="editModal" aria-hidden="true">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="eTitle">
+    <div class="pane__head"><span id="eTitle">Агент</span><button class="link" data-close type="button">Закрыть</button></div>
+    <div class="sheet__body">
+      <label class="lbl">Имя<input class="field" id="eName" maxlength="24"></label>
+      <label class="lbl">Роль<input class="field" id="eRole" maxlength="40"></label>
+      <label class="lbl">Миссия — что агент исследует в сети<textarea class="field" id="eMission" rows="2" maxlength="300"></textarea></label>
+      <label class="lbl">Дополнительные инструкции<textarea class="field" id="ePrompt" rows="2" maxlength="600"></textarea></label>
+      <label class="lbl">Модель<select class="field" id="eModel"></select></label>
+      <div class="lbl">Разрешения<div class="perms" id="ePerms"></div></div>
+    </div>
+    <div class="sheet__foot"><button class="btn btn--ghost btn--sm" id="eDel" type="button">Удалить</button><button class="btn btn--solid btn--sm" id="eSave" type="button">Сохранить</button></div>
   </div>
-  <div class="sheet-foot"><button class="btn danger" id="mDel">Удалить</button><button class="btn" id="mSave">Сохранить</button></div>
-</div></div>
+</div>
 
-<!-- Чат с агентом -->
-<div class="modal" id="chatModal"><div class="sheet chat">
-  <div class="sheet-head"><h2 id="cTitle">Чат</h2><button class="x" id="cClose">✕</button></div>
-  <div id="msgs" class="msgs"></div>
-  <form id="cForm" class="cform"><input id="cIn" class="inp" placeholder="Напиши задачу агенту…" autocomplete="off"><button class="btn">Отправить</button></form>
-</div></div>
+<!-- Чат -->
+<div class="modal" id="chatModal" aria-hidden="true">
+  <div class="sheet sheet--chat" role="dialog" aria-modal="true" aria-labelledby="cTitle">
+    <div class="pane__head"><span id="cTitle">Чат</span><button class="link" data-close type="button">Закрыть</button></div>
+    <div class="msgs" id="msgs"></div>
+    <form class="cform" id="cForm"><input class="field" id="cIn" placeholder="Сообщение агенту" autocomplete="off" aria-label="Сообщение"><button class="btn btn--solid btn--sm">Отправить</button></form>
+  </div>
+</div>
 
-<div id="toasts"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>
 </html>
