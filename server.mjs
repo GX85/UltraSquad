@@ -179,6 +179,7 @@ function ingest(rows, changes = {}) {
     const bySource = new Map();
     let processed = 0;
     let flagged = 0;
+    let latest;
     for (const event of history) {
       if (event.type !== agent.type || (agent.source && agent.source !== event.source)) continue;
       const queue = bySource.get(event.source) || [];
@@ -188,26 +189,29 @@ function ingest(rows, changes = {}) {
       bySource.set(event.source, queue);
       if (!check.has(event)) continue;
       processed++;
+      latest = event;
       if (queue.length >= agent.threshold) {
         const agents = matches.get(event) || [];
-        agents.push(agent);
+        agents.push({ id: agent.id, name: agent.name, count: queue.length, threshold: agent.threshold });
         matches.set(event, agents);
         flagged++;
       }
     }
-    if (processed) runs.push({ agent, processed, flagged });
+    if (processed) runs.push({ agent, processed, flagged, latest });
   }
   const events = history.map(event => check.has(event)
     ? { ...event, id: randomUUID(), agent: matchLabel(matches.get(event)),
         matches: (matches.get(event) || []).map(agent => agent.id),
+        ...(matches.has(event) && { evidence: matches.get(event) }),
         status: matches.has(event) ? 'new' : 'logged' } : event)
     .reverse().slice(0, 1000);
   const agentStats = { ...state.agentStats };
-  for (const { agent, processed, flagged } of runs) {
+  const lastRun = new Date().toISOString();
+  for (const { agent, processed, flagged, latest } of runs) {
     const before = agentStats[agent.id] || { processed: 0, flagged: 0 };
     agentStats[agent.id] = {
       processed: before.processed + processed, flagged: before.flagged + flagged,
-      lastRun: new Date().toISOString()
+      lastRun, lastSource: latest.source, lastEventTime: latest.time
     };
   }
   save({ ...state, ...changes, events, agentStats, seen: [...seen].slice(-5000), imported: state.imported + fresh.length });

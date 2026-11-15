@@ -48,12 +48,17 @@
     const list = models.some(model => model.id === agent.model) ? models : [...models, { id: agent.model, label: agent.model }];
     return list.map(model => '<option value="' + escape(model.id) + '"' + (model.id === agent.model ? ' selected' : '') + '>' + escape(model.label) + '</option>').join('');
   }
+  function activityLabel(agent, measure) {
+    if (!agent.enabled) return 'Агент на паузе';
+    if (!measure?.lastRun) return 'Ожидание событий по правилу';
+    return 'Обработка ' + dates.format(new Date(measure.lastRun));
+  }
   function renderAgentList() {
     const search = $('#agent-search').value.toLocaleLowerCase('ru');
     const matches = state.agents.filter(agent => agent.name.toLocaleLowerCase('ru').includes(search));
     $('#agent-list').innerHTML = matches.map(agent => '<button type="button" class="agent-choice" data-select="' + escape(agent.id)
       + '" aria-pressed="' + (agent.id === selectedId) + '"><strong>' + escape(agent.name) + '</strong><small>'
-      + (agent.enabled ? 'Активен' : 'На паузе') + ' · ' + escape(state.types[agent.type]) + '</small></button>').join('') || '<p class="empty">Агенты не найдены</p>';
+      + escape(activityLabel(agent, state.runtime.operating?.[agent.id])) + ' · ' + escape(state.types[agent.type]) + '</small></button>').join('') || '<p class="empty">Агенты не найдены</p>';
   }
   function renderEditor() {
     const agent = state.agents.find(item => item.id === selectedId);
@@ -62,9 +67,15 @@
       return;
     }
     const disabledBrief = !agent.enabled || !agent.allowBrief;
+    const measure = state.runtime.operating?.[agent.id];
     $('#agent-editor').innerHTML = [
       '<div class="editor-heading"><h3>' + escape(agent.name) + '</h3><button type="button" data-toggle="' + escape(agent.id) + '" data-enabled="' + !agent.enabled + '">' + (agent.enabled ? 'Пауза' : 'Запустить') + '</button></div>',
       '<p class="editor-description">' + escape(state.types[agent.type]) + ' · Порог на один источник за 10 минут</p>',
+      '<dl class="agent-activity"><div><dt>Обработано</dt><dd>' + (measure?.processed ?? 0) + '</dd></div>'
+        + '<div><dt>Сигналов</dt><dd>' + (measure?.flagged ?? 0) + '</dd></div>'
+        + '<div><dt>Последнее событие</dt><dd>' + (measure?.lastEventTime
+          ? escape(dates.format(new Date(measure.lastEventTime))) + ' · ' + escape(measure.lastSource ?? '')
+          : '—') + '</dd></div></dl>',
       '<form class="agent-form" data-agent="' + escape(agent.id) + '">',
       '<label>Порог событий<input name="threshold" type="number" min="1" max="50" value="' + agent.threshold + '" required></label>',
       '<label>Источник<input name="source" maxlength="40" value="' + escape(agent.source) + '" placeholder="Все источники"></label>',
@@ -83,10 +94,25 @@
       ? '<p>' + escape(brief.agent) + ' · ' + escape(brief.model) + ' · ' + escape(dates.format(new Date(brief.time))) + '</p><pre>' + escape(brief.text) + '</pre>'
       : '<p class="empty">Сводка появится после запроса к модели.</p>';
   }
+  function signalDetails(event) {
+    if (!event.agent) return '—';
+    if (!event.evidence?.length) return escape(event.agent);
+    const items = event.evidence.map(item => '<li><strong>' + escape(item.name) + '</strong> · '
+      + item.count + ' событий за 10 мин, порог ' + item.threshold + '</li>').join('');
+    return '<details class="signal-detail" data-evidence="' + escape(event.id) + '"><summary>' + escape(event.agent)
+      + '</summary><p>Источник ' + escape(event.source) + '</p><ul>' + items + '</ul></details>';
+  }
+  function showTable(element, events, review = false) {
+    const opened = new Set(Array.from(element.querySelectorAll('details[open]'), detail => detail.dataset.evidence));
+    element.innerHTML = table(events, review);
+    for (const detail of element.querySelectorAll('details[data-evidence]')) {
+      if (opened.has(detail.dataset.evidence)) detail.open = true;
+    }
+  }
   function table(events, review = false) {
     if (!events.length) return '<p class="empty">Нет событий по этим условиям</p>';
     const rows = events.map(event => '<tr><td>' + escape(dates.format(new Date(event.time))) + '</td><td>'
-      + escape(state.types[event.type]) + '</td><td>' + escape(event.source) + '</td><td>' + escape(event.agent || '—') + '</td><td>'
+      + escape(state.types[event.type]) + '</td><td>' + escape(event.source) + '</td><td>' + signalDetails(event) + '</td><td>'
       + escape(statuses[event.status]) + '</td>' + (review ? '<td>' + (event.status === 'new' ? '<button data-review="' + escape(event.id)
       + '">Проверено</button>' : '') + '</td>' : '') + '</tr>').join('');
     return '<table><thead><tr><th>Время</th><th>Событие</th><th>Источник</th><th>Агент</th><th>Статус</th>' + (review ? '<th>Действия</th>' : '') + '</tr></thead><tbody>' + rows + '</tbody></table>';
@@ -96,8 +122,8 @@
     const query = $('#search').value.trim().toLocaleLowerCase('ru');
     const status = $('#filter').value;
     const matches = state.events.filter(event => (!status || status === event.status) &&
-      [event.source, state.types[event.type], event.agent].some(value => String(value || '').toLocaleLowerCase('ru').includes(query)));
-    $('#event-table').innerHTML = table(matches, true);
+      [event.source, state.types[event.type], event.agent, ...(event.evidence || []).map(item => item.name)].some(value => String(value || '').toLocaleLowerCase('ru').includes(query)));
+    showTable($('#event-table'), matches, true);
   }
   function renderRuntime() {
     const runtime = state.runtime;
@@ -122,7 +148,7 @@
     $('#agent-chart').innerHTML = state.agents.map(agent => {
       const measure = metrics[agent.id] || { processed: 0, flagged: 0 };
       return '<div class="agent-bar"><div><span>' + escape(agent.name) + '</span><span>' + measure.processed + '</span></div><meter min="0" max="' + maximum + '" value="' + measure.processed
-        + '" aria-label="Обработано агентом ' + escape(agent.name) + '"></meter><small>Сигналов ' + measure.flagged + (agent.enabled ? '' : ' · На паузе') + '</small></div>';
+        + '" aria-label="Обработано агентом ' + escape(agent.name) + '"></meter><small>Сигналов ' + measure.flagged + ' · ' + escape(activityLabel(agent, measure)) + '</small></div>';
     }).join('') || '<p class="empty">Добавьте агентов для наблюдения.</p>';
   }
   function render(options = {}) {
@@ -130,7 +156,7 @@
     $('#stat-total').textContent = state.imported;
     $('#stat-open').textContent = state.events.filter(event => event.status === 'new').length;
     $('#stat-agents').textContent = state.agents.filter(agent => agent.enabled).length + ' / ' + state.agents.length;
-    $('#recent').innerHTML = table(state.events.filter(event => event.agent).slice(0, 5));
+    showTable($('#recent'), state.events.filter(event => event.agent).slice(0, 5));
     $('#demo').disabled = state.demoLoaded;
     const remaining = (state.limit || 100) - state.agents.length;
     $('#agent-capacity').textContent = state.agents.length + ' из ' + (state.limit || 100) + ' агентов';
