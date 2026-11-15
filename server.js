@@ -299,6 +299,10 @@ const HONEYPOTS = ['/wp-login.php', '/wp-admin', '/.env', '/.env.local', '/.git/
 const SUSPICIOUS = /(\.\.(\/|%2f)|%2e%2e|<script|union\s+select|\bor\s+1=1|sleep\(\d|benchmark\(|;\s*(cat|wget|curl|bash|nc|chmod)\s|\|\s*(sh|bash)\b|\$\{jndi:|\$\{\s*\w+\s*\}|\/bin\/(sh|bash)|\betc\/passwd|<\?php|\beval\(|base64_decode|\bpasswd\b.*:.*:0:0)/i;
 const BADUA = /sqlmap|nikto|nmap|masscan|zgrab|dirbuster|gobuster|wpscan|nuclei|acunetix|nessus|hydra|fuzz|feroxbuster|httpx\b|\bpython-requests\b|\bcurl\/|libwww|semrush|petalbot/i;
 const hits = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 10000;
+  for (const [ip, timestamps] of hits) if (timestamps.at(-1) < cutoff) hits.delete(ip);
+}, 10000).unref();
 const norm = ip => (ip || '').replace(/^::ffff:/, '');
 const isLocal = ip => ['127.0.0.1', '::1', ''].includes(ip);
 
@@ -510,7 +514,24 @@ function secStats() {
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src https://d8j0ntlcm91z4.cloudfront.net; img-src 'self' data: https://d8j0ntlcm91z4.cloudfront.net; connect-src 'self'; frame-ancestors 'none'";
 const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(v)); };
-const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
+async function body(req) {
+  const sizeLimit = 64 * 1024;
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+    size += chunk.length;
+    if (size > sizeLimit) throw Object.assign(new Error('Запрос слишком большой'), { status: 413 });
+    chunks.push(chunk);
+  }
+  if (!size) return {};
+  try {
+    const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error();
+    return result;
+  } catch {
+    throw Object.assign(new Error('Ожидается JSON-объект'), { status: 400 });
+  }
+}
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
   chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), goal });
@@ -611,7 +632,10 @@ async function api(req, res, url) {
   return json(res, 404, { error: 'not found' });
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000, maxHeaderSize: 8192 }, async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
   const ip = norm(req.socket.remoteAddress);
   const url = (req.url || '/').split('?')[0];
   if (bans[ip] && !isLocal(ip)) { res.writeHead(403); return res.end('banned'); }
@@ -625,14 +649,41 @@ const server = http.createServer(async (req, res) => {
       // API доступен только с этого компьютера; защита от DNS-rebinding и CSRF
       const hostOk = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '');
       const origin = req.headers.origin;
-      if (!isLocal(ip) || !hostOk || (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin))) return json(res, 403, { error: 'API доступен только с localhost' });
+      const site = req.headers['sec-fetch-site'];
+      if (!isLocal(ip) || !hostOk || (origin && origin !== 'http://' + req.headers.host) ||
+        (site && site !== 'same-origin' && site !== 'none')) {
+        return json(res, 403, { error: 'API доступен только из локальной панели' });
+      }
+      const write = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method);
+      const hasBody = Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'];
+      if (write && hasBody && !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
+        return json(res, 415, { error: 'Ожидается application/json' });
+      }
+      if (write && Number(req.headers['content-length']) > 64 * 1024) {
+        res.setHeader('Connection', 'close');
+        return json(res, 413, { error: 'Запрос слишком большой' });
+      }
       return await api(req, res, url);
     }
-    const f = path.normalize(path.join(PUB, url === '/' ? 'index.html' : url));
-    if (!f.startsWith(PUB) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end('404'); }
+    if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
+    const f = path.resolve(PUB, '.' + (url === '/' ? '/index.html' : url));
+    const real = fs.existsSync(f) && fs.realpathSync(f);
+    const relative = real && path.relative(fs.realpathSync(PUB), real);
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative) || !fs.statSync(real).isFile()) {
+      res.writeHead(404); return res.end('404');
+    }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
-    fs.createReadStream(f).pipe(res);
-  } catch (e) { log('http', url, e.message); if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
+    if (req.method === 'HEAD') return res.end();
+    const stream = fs.createReadStream(real);
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
+  } catch (e) {
+    const status = e.status || 500;
+    if (status === 500) log('http', e.message);
+    if (res.headersSent || res.destroyed) return res.end();
+    if (status === 413) res.setHeader('Connection', 'close');
+    json(res, status, { error: status === 500 ? 'Ошибка сервера' : e.message });
+  }
 });
 server.on('error', e => { if (e.code === 'EADDRINUSE') { log(`Порт ${PORT} занят — UltraSquad уже запущен. Выход.`); process.exit(0); } log('server', e); process.exit(1); });
 server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); });
