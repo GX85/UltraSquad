@@ -1,0 +1,7 @@
+data/
+telemetry/
+.env
+.env.*
+node-path.txt
+node_modules/
+*.log
