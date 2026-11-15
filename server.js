@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const web = require('./lib/web');
 const camLib = require('./lib/cam');
+const { createMonitor } = require('./lib/defender');
 
 // ---------- окружение ----------
 try {
@@ -61,7 +62,7 @@ const TEMPLATES = [
 const NAMES = ['ATLAS', 'NOVA', 'ORION', 'VEGA', 'LYNX', 'ECHO', 'ONYX', 'HELIX', 'PULSE', 'RAVEN', 'ZENITH', 'CIPHER', 'DELTA', 'EMBER', 'FLUX', 'GHOST', 'HALO', 'ION', 'JADE', 'KRAIT'];
 
 // brain: 'free' (бесплатные модели OpenRouter, по умолчанию) | 'claude' (только по явному выбору)
-let settings = { running: true, rpm: 16, brain: 'free', claudeModel: 'haiku', claudePerHour: 600, ...load('settings', {}) };
+let settings = { running: true, rpm: 16, brain: 'free', claudeModel: 'haiku', claudePerHour: 600, ollamaModel: 'llama3.2', ...load('settings', {}) };
 let agents = load('agents', null);
 let events = load('events', []);
 let bans = load('bans', {});
@@ -200,7 +201,9 @@ function refill() {
   bucket.tokens = Math.min(max, bucket.tokens + (now - bucket.ts) * (stats.cap * 0.85 / 86400000)); bucket.ts = now;
 }
 const quota = () => { ensureDay(); refill(); return { used: stats.used, cap: stats.cap, freeTier: stats.freeTier, exhausted: stats.exhausted, cooldown: Math.max(0, rl.cooldownUntil - Date.now()), tokens: Math.floor(bucket.tokens), rpm: settings.rpm,
-  brain: brain(), brainSetting: settings.brain, claude: { available: !!findClaude(), used: claudeUsed(), cap: settings.claudePerHour, model: settings.claudeModel, paused: cl.failUntil > Date.now(), error: cl.lastError } }; };
+  brain: brain(), brainSetting: settings.brain,
+  claude: { available: !!findClaude(), used: claudeUsed(), cap: settings.claudePerHour, model: settings.claudeModel, paused: cl.failUntil > Date.now(), error: cl.lastError },
+  ollama: { configured: !!ol.base, up: ol.ok === true, used: ollamaUsed(), model: settings.ollamaModel, base: ol.base, paused: ol.failUntil > Date.now(), error: ol.lastError } }; };
 const pushQuota = () => push('quota', quota());
 // может ли автономный агент сейчас потратить запрос к модели
 function llmReady() {
@@ -260,8 +263,34 @@ function findClaude() {
   return cl.bin;
 }
 function claudeUsed() { const t = Date.now() - 3600000; while (cl.calls.length && cl.calls[0] < t) cl.calls.shift(); return cl.calls.length; }
-// По умолчанию — только бесплатные модели. Claude включается только явным выбором в настройках.
-const brain = () => settings.brain === 'claude' && findClaude() ? 'claude' : 'free';
+
+// ---------- Ollama как мозг (локальная Ollama — бесплатно; облако ollama.com — с кредитами) ----------
+const ol = { base: (process.env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/+$/, ''), key: process.env.OLLAMA_API_KEY || '', active: 0, calls: [], failUntil: 0, fails: 0, lastError: '', ok: null };
+const olHeaders = () => ol.key ? { Authorization: 'Bearer ' + ol.key } : {};
+async function ollamaUp() { try { const r = await fetch(ol.base + '/api/tags', { headers: olHeaders(), signal: AbortSignal.timeout(4000) }); ol.ok = r.ok; } catch { ol.ok = false; } return ol.ok; }
+function ollamaUsed() { const t = Date.now() - 3600000; while (ol.calls.length && ol.calls[0] < t) ol.calls.shift(); return ol.calls.length; }
+async function chatOllama(messages, { max_tokens = 350, temperature = 0.6 } = {}) {
+  const model = settings.ollamaModel || 'llama3.2';
+  ol.active++; ol.calls.push(Date.now()); pushQuota();
+  try {
+    const r = await fetch(ol.base + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000),
+      headers: { 'Content-Type': 'application/json', ...olHeaders() },
+      body: JSON.stringify({ model, messages, stream: false, think: false, options: { temperature, num_predict: max_tokens } }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) throw new Error(String(j.error || 'HTTP ' + r.status).slice(0, 140));
+    const text = String(j.message?.content || '').trim();
+    if (!text) throw new Error('Ollama: пустой ответ');
+    ol.fails = 0; ol.lastError = ''; ol.ok = true;
+    return { text, model: 'ollama:' + model };
+  } catch (e) {
+    ol.lastError = e.message; if (++ol.fails >= 3) { ol.fails = 0; ol.failUntil = Date.now() + 120000; log('Ollama недоступна, пауза 2 мин:', e.message); }
+    throw e;
+  } finally { ol.active--; pushQuota(); }
+}
+const canFree = () => !!OR_KEY && !stats.exhausted && stats.used < stats.cap;
+
+// По умолчанию — только бесплатные модели OpenRouter. Claude и Ollama — по явному выбору.
+const brain = () => settings.brain === 'claude' && findClaude() ? 'claude' : settings.brain === 'ollama' ? 'ollama' : 'free';
 function chatClaude(messages) {
   return new Promise((resolve, reject) => {
     const bin = findClaude(); if (!bin) return reject(new Error('claude.exe не найден'));
@@ -294,18 +323,23 @@ function chatClaude(messages) {
 }
 // Единая точка вызова модели: Claude → (если не вышло) бесплатные модели OpenRouter
 async function chat(pref, messages, opts = {}) {
-  if (brain() === 'claude' && Date.now() >= cl.failUntil && claudeUsed() < settings.claudePerHour * (opts.priority ? 1.25 : 1)) {
-    try { return await chatClaude(messages); }
-    catch (e) { if (!OR_KEY || stats.exhausted || stats.used >= stats.cap) throw e; }
+  const b = brain();
+  if (b === 'claude' && Date.now() >= cl.failUntil && claudeUsed() < settings.claudePerHour * (opts.priority ? 1.25 : 1)) {
+    try { return await chatClaude(messages); } catch (e) { if (!canFree()) throw e; }
+  }
+  if (b === 'ollama' && Date.now() >= ol.failUntil) {
+    try { return await chatOllama(messages, opts); } catch (e) { if (!canFree()) throw e; }
   }
   return chatFree(pref, messages, opts);
 }
 // Забронировать запрос к модели для автономного шага (равномерно по часу / суткам)
 function takeSlot() {
-  if (brain() === 'claude' && Date.now() >= cl.failUntil) {
+  const b = brain();
+  if (b === 'claude' && Date.now() >= cl.failUntil) {
     if (claudeUsed() >= settings.claudePerHour || cl.active >= 3 || Date.now() - cl.lastAuto < 3600000 / settings.claudePerHour) return false;
     cl.lastAuto = Date.now(); return true;
   }
+  if (b === 'ollama' && ol.ok !== false && Date.now() >= ol.failUntil) { return ol.active < 4; } // локально — без суточного лимита
   if (!llmReady()) return false;
   bucket.tokens -= 1; return true;
 }
@@ -410,9 +444,12 @@ setInterval(() => {
 }, 1000);
 
 // ---------- безопасность ----------
-const HONEYPOTS = ['/wp-login.php', '/wp-admin', '/.env', '/.git/config', '/phpmyadmin', '/admin.php', '/xmlrpc.php',
-  '/cgi-bin/', '/etc/passwd', '/server-status', '/actuator/health', '/shell', '/config.json', '/backup.sql'];
-const SUSPICIOUS = /(\.\.\/|%2e%2e|<script|union\s+select|\bor\s+1=1|;\s*(cat|wget|curl)\s|\$\{jndi:|\/bin\/sh)/i;
+const HONEYPOTS = ['/wp-login.php', '/wp-admin', '/.env', '/.env.local', '/.git/config', '/.git/head', '/phpmyadmin', '/pma', '/admin.php', '/administrator', '/xmlrpc.php',
+  '/cgi-bin/', '/etc/passwd', '/server-status', '/actuator', '/actuator/health', '/shell', '/config.json', '/backup.sql', '/dump.sql', '/.aws/credentials', '/.ssh/id_rsa',
+  '/wp-content', '/vendor/phpunit', '/solr/', '/.vscode/sftp.json', '/telescope/requests', '/_ignition/execute-solution', '/boaform/', '/geoserver/', '/.docker/config.json'];
+// Признаки атак на СВОЙ сервер: path traversal, SQLi, XSS, RCE, Log4Shell, SSTI
+const SUSPICIOUS = /(\.\.(\/|%2f)|%2e%2e|<script|union\s+select|\bor\s+1=1|sleep\(\d|benchmark\(|;\s*(cat|wget|curl|bash|nc|chmod)\s|\|\s*(sh|bash)\b|\$\{jndi:|\$\{\s*\w+\s*\}|\/bin\/(sh|bash)|\betc\/passwd|<\?php|\beval\(|base64_decode)/i;
+const BADUA = /sqlmap|nikto|nmap|masscan|zgrab|dirbuster|gobuster|wpscan|nuclei|acunetix|nessus|hydra|fuzz|feroxbuster|httpx\b|\bpython-requests\b|\bcurl\/|libwww/i;
 const hits = new Map();
 const norm = ip => (ip || '').replace(/^::ffff:/, '');
 const isLocal = ip => ['127.0.0.1', '::1', ''].includes(ip);
@@ -422,10 +459,45 @@ function logEvent(ev) {
   ev = { id: crypto.randomUUID().slice(0, 8), ts: Date.now(), ...ev };
   events.push(ev); if (events.length > 2000) events.shift();
   persist(); push('threat', ev);
-  if (ev.kind !== 'ban') sentinelAlert(ev);
+  if (ev.kind !== 'ban') { sentinelAlert(ev); if (/high|critical/.test(ev.severity)) noteAttack(); }
   if (ev.kind !== 'ban' && /high|critical/.test(ev.severity) && !patrolTimer) patrolTimer = setTimeout(() => { patrolTimer = null; patrol().catch(e => log('patrol', e.message)); }, 30000);
   return ev;
 }
+
+// ---------- защитный карантин: при всплеске атак сервер сам закрывает внешний доступ (localhost работает) ----------
+const lock = { on: false, manual: false, until: 0, hits: [], threshold: 8, window: 60000, hold: 120000 };
+const lockState = () => ({ on: lock.on, manual: lock.manual, until: lock.until, remaining: Math.max(0, lock.until - Date.now()), threshold: lock.threshold });
+function setLock(on, manual, reason) {
+  on = !!on;
+  if (lock.on === on && lock.manual === manual) { if (on && !manual) lock.until = Date.now() + lock.hold; return; }
+  lock.on = on; lock.manual = manual; lock.until = on && !manual ? Date.now() + lock.hold : 0;
+  push('lock', lockState());
+  const s = agents.find(x => x.enabled && x.permissions.includes('security.read')) || agents.find(x => x.enabled);
+  if (s) say(s, on ? 'alert' : 'info', on
+    ? `Карантин включён — сервер под атакой, внешний доступ временно закрыт.${reason ? ' ' + reason : ''} Локальная работа продолжается.`
+    : `Карантин снят${manual ? ' вручную' : ''} — внешний доступ восстановлен.`);
+  log('lockdown', on ? 'ON ' + (reason || '') : 'OFF');
+}
+function noteAttack() {
+  const now = Date.now(); lock.hits = lock.hits.filter(t => now - t < lock.window); lock.hits.push(now);
+  if (!lock.on && lock.hits.length >= lock.threshold) setLock(true, false, `${lock.hits.length} атак за минуту.`);
+  else if (lock.on && !lock.manual) lock.until = now + lock.hold;
+}
+setInterval(() => { if (lock.on && !lock.manual && Date.now() > lock.until) setLock(false, false); }, 5000);
+
+// ---------- Microsoft Defender: читаем локальный статус антивируса (только Windows) ----------
+function defenderSummary(s) {
+  if (s.error) return s.error;
+  if (s.available === null) return 'Статус Microsoft Defender недоступен.';
+  const parts = [`Defender ${s.available ? 'включён' : 'выключен'}`, `защита в реальном времени ${s.realtime ? 'вкл' : 'выкл'}`];
+  if (s.activeThreats) parts.push(`активных угроз: ${s.activeThreats}`); else parts.push('активных угроз нет');
+  return parts.join(', ') + '.';
+}
+const defender = createMonitor((status, changed) => {
+  push('defender', status);
+  const s = agents.find(x => x.enabled && x.permissions.includes('security.read'));
+  if (changed && s) say(s, status.activeThreats || status.realtime === false ? 'alert' : 'info', 'Microsoft Defender. ' + defenderSummary(status));
+});
 // Sentinel поднимает тревогу в общем чате и зовёт на подмогу агентов по кибербезопасности
 let lastAlert = 0;
 function sentinelAlert(ev) {
@@ -447,7 +519,7 @@ function inspect(req, ip) {
   let url = (req.url || '').split('?')[0].toLowerCase(); try { url = decodeURIComponent(url); } catch {}
   const raw = req.url || '', ua = req.headers['user-agent'] || '';
   if (HONEYPOTS.some(h => url.startsWith(h))) { logEvent({ kind: 'honeypot', severity: 'high', ip, detail: `Ловушка ${url} · ${ua.slice(0, 60)}` }); ban(ip, `ханипот ${url}`); return 'honeypot'; }
-  if (SUSPICIOUS.test(raw) || /sqlmap|nikto|nmap|masscan|zgrab|dirbuster/i.test(ua)) { logEvent({ kind: 'attack', severity: 'critical', ip, detail: `Подозрительный запрос: ${raw.slice(0, 80)} · ${ua.slice(0, 40)}` }); ban(ip, 'сигнатура атаки'); return 'attack'; }
+  if (SUSPICIOUS.test(raw) || BADUA.test(ua)) { logEvent({ kind: 'attack', severity: 'critical', ip, detail: `Подозрительный запрос: ${raw.slice(0, 80)} · ${ua.slice(0, 40)}` }); ban(ip, 'сигнатура атаки'); return 'attack'; }
   const now = Date.now(); const a = (hits.get(ip) || []).filter(t => now - t < 10000); a.push(now); hits.set(ip, a);
   if (a.length > 150) { logEvent({ kind: 'flood', severity: 'medium', ip, detail: `${a.length} запросов за 10 сек` }); ban(ip, 'флуд'); return 'flood'; }
   return null;
@@ -476,6 +548,16 @@ function sysInfo() {
   const cpus = os.cpus();
   return { host: os.hostname(), uptime: process.uptime(), cores: cpus.length, memTotal: os.totalmem(), memFree: os.freemem(), procMem: process.memoryUsage().rss, node: process.version, active };
 }
+// Сводка по безопасности: оценка защиты (0–100), разбивка по видам, топ источников
+function secStats() {
+  const now = Date.now(), hour = events.filter(e => e.kind !== 'ban' && now - e.ts < 3600000);
+  const byKind = {}; for (const e of hour) byKind[e.kind] = (byKind[e.kind] || 0) + 1;
+  const bySrc = {}; for (const e of hour) if (e.ip) bySrc[e.ip] = (bySrc[e.ip] || 0) + 1;
+  const top = Object.entries(bySrc).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([ip, n]) => ({ ip, n, banned: !!bans[ip] }));
+  const recent = lock.hits.filter(t => now - t < 60000).length;
+  const score = Math.max(0, 100 - recent * 9 - Math.min(40, hour.length * 2) - (lock.on ? 30 : 0));
+  return { score, lastHour: hour.length, byKind, top, banned: Object.keys(bans).length, recentAttacks: recent };
+}
 
 // ---------- HTTP ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
@@ -484,7 +566,7 @@ const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'applicat
 const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
-  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin } });
+  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot() });
 const pushAgents = () => push('agents', agents.map(pub));
 
 async function api(req, res, url) {
@@ -499,9 +581,10 @@ async function api(req, res, url) {
     const b = await body(req);
     if ('running' in b) settings.running = !!b.running;
     if (b.rpm) settings.rpm = Math.min(20, Math.max(1, +b.rpm || 16));
-    if (['claude', 'free'].includes(b.brain)) { settings.brain = b.brain; cl.failUntil = 0; cl.fails = 0; }
+    if (['claude', 'free', 'ollama'].includes(b.brain)) { settings.brain = b.brain; cl.failUntil = 0; cl.fails = 0; ol.failUntil = 0; ol.fails = 0; if (b.brain === 'ollama') ollamaUp(); }
     if (['haiku', 'sonnet'].includes(b.claudeModel)) settings.claudeModel = b.claudeModel;
     if (b.claudePerHour) settings.claudePerHour = Math.min(3000, Math.max(30, Math.round(+b.claudePerHour) || 600));
+    if (typeof b.ollamaModel === 'string' && b.ollamaModel.trim()) settings.ollamaModel = b.ollamaModel.trim().slice(0, 60);
     persist(); push('settings', settings); pushQuota(); return json(res, 200, settings);
   }
   if (url === '/api/agents' && req.method === 'POST') {
@@ -549,6 +632,12 @@ async function api(req, res, url) {
     if (req.method === 'DELETE') { agents.splice(i, 1); RT.delete(a.id); lastEntry.delete(a.id); if (air.pin === a.id) air.pin = null; persist(); pushAgents(); return json(res, 200, { ok: true }); }
   }
   if (url === '/api/patrol' && req.method === 'POST') return json(res, 200, await patrol());
+  if (url === '/api/lockdown' && req.method === 'POST') { const b = await body(req); setLock(!!b.on, true); return json(res, 200, lockState()); }
+  if (url === '/api/defender' && req.method === 'POST') { const s = await defender.refresh(); return json(res, 200, { status: s, summary: defenderSummary(s) }); }
+  if (url === '/api/export') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="ultrasquad-incidents-${new Date().toISOString().slice(0, 10)}.json"` });
+    return res.end(JSON.stringify({ generated: new Date().toISOString(), host: os.hostname(), summary: secStats(), defender: defender.snapshot(), bans, events }, null, 2));
+  }
   if (url === '/api/cam.mjpg') { if (!cam.available) return json(res, 503, { error: 'Браузер для камеры не найден' }); return cam.addViewer(req, res); }
   if (url === '/api/cam' && req.method === 'POST') {
     const b = await body(req); air.pin = b.pin && agents.some(a => a.id === b.pin) ? b.pin : null;
@@ -574,6 +663,7 @@ const server = http.createServer(async (req, res) => {
   const ip = norm(req.socket.remoteAddress);
   const url = (req.url || '/').split('?')[0];
   if (bans[ip] && !isLocal(ip)) { res.writeHead(403); return res.end('banned'); }
+  if (lock.on && !isLocal(ip)) { res.writeHead(503, { 'Retry-After': '120', 'Content-Type': 'text/plain' }); return res.end('Service temporarily unavailable'); }
   const trap = HONEYPOTS.some(h => url.toLowerCase().startsWith(h));
   const verdict = isLocal(ip) && !trap ? null : inspect(req, ip);
   if (verdict) { res.writeHead(verdict === 'honeypot' ? 200 : 400, { 'Content-Type': 'text/html' }); return res.end(verdict === 'honeypot' ? '<html><body><form>Login</form></body></html>' : 'Bad Request'); }
@@ -592,7 +682,9 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { log('http', url, e.message); if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
 });
 server.on('error', e => { if (e.code === 'EADDRINUSE') { log(`Порт ${PORT} занят — UltraSquad уже запущен. Выход.`); process.exit(0); } log('server', e); process.exit(1); });
-server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); });
+server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); });
 setInterval(refreshKey, 3600000);
-setInterval(() => { push('sys', sysInfo()); pushQuota(); }, 3000);
+setInterval(() => { if (settings.brain === 'ollama') ollamaUp(); }, 30000);
+setInterval(() => { defender.refresh().catch(() => {}); }, 600000); // проверка Defender раз в 10 минут
+setInterval(() => { push('sys', sysInfo()); pushQuota(); push('sec', secStats()); }, 3000);
 for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => { dirty = true; flush(); cam.stop(); process.exit(0); });

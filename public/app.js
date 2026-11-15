@@ -67,10 +67,14 @@ function renderStrip() {
   $('#sAgents').textContent = `${S.agents.length}/${S.max}`;
   $('#sActive').textContent = busy;
   $('#sPages').textContent = pages;
-  if (q.brain === 'claude') {
-    const c = q.claude || {};
+  if (q.brainSetting === 'claude' && q.claude) {
+    const c = q.claude;
     $('#sLlm').textContent = `${c.used ?? 0}/${c.cap ?? 0}`;
     $('#sLlmLbl').textContent = `Claude ${c.model || ''} · ` + (c.paused ? 'пауза' : c.used >= c.cap ? 'лимит часа' : 'за час');
+  } else if (q.brainSetting === 'ollama' && q.ollama) {
+    const o = q.ollama;
+    $('#sLlm').textContent = o.up ? `${o.used ?? 0}/ч` : '—';
+    $('#sLlmLbl').textContent = 'Ollama · ' + (o.up ? o.model : 'недоступна');
   } else {
     $('#sLlm').textContent = `${q.used ?? 0}/${q.cap ?? 0}`;
     $('#sLlmLbl').textContent = 'Бесплатные модели · ' + (q.exhausted || q.used >= q.cap ? 'лимит исчерпан' : q.cooldown > 0 ? 'пауза api' : 'сегодня');
@@ -232,6 +236,24 @@ $('#cForm').onsubmit = async e => {
 };
 
 // ---------- охота ----------
+const KIND_RU = { honeypot: 'ловушки', attack: 'атаки', flood: 'флуд', ban: 'баны' };
+function renderShield() {
+  const sec = S.sec || {}, lk = S.lock || {}, score = sec.score ?? 100;
+  $('#shield').classList.toggle('locked', !!lk.on);
+  $('#gaugeFg').style.strokeDashoffset = 327 - 327 * score / 100;
+  $('#gaugeFg').style.stroke = lk.on || score < 40 ? 'var(--red)' : score < 75 ? 'var(--orange)' : 'var(--green)';
+  $('#scoreNum').textContent = score;
+  $('#shieldState').textContent = lk.on ? 'Карантин · отражаем атаку' : score >= 75 ? 'Под контролем' : score >= 40 ? 'Повышенная активность' : 'Активная атака';
+  $('#shieldSub').textContent = `Угроз за час: ${sec.lastHour ?? 0} · в бане: ${sec.banned ?? 0}` + (sec.recentAttacks ? ` · ${sec.recentAttacks} за минуту` : '');
+  $('#kindChips').innerHTML = Object.entries(sec.byKind || {}).map(([k, n]) => `<span>${esc(KIND_RU[k] || k)}: ${n}</span>`).join('');
+  $('#lockTitle').textContent = lk.on ? (lk.manual ? 'Карантин включён вручную' : 'Карантин активен') : 'Карантин выключен';
+  $('#lockSub').textContent = lk.on ? (lk.manual ? 'Внешний доступ закрыт, пока не выключишь' : `Снимется автоматически через ${Math.ceil((lk.remaining || 0) / 1000)} с после затишья`) : 'Включится сам при массовой атаке';
+  $('#lockBtn').textContent = lk.on ? 'Снять карантин' : 'Включить карантин';
+  $('#lockBtn').className = 'btn btn--sm ' + (lk.on ? 'btn--danger' : 'btn--ghost');
+  const d = S.defender || {};
+  $('#defSub').textContent = d.error ? d.error : d.available === null || d.available === undefined ? 'Статус недоступен' :
+    `${d.available ? 'включён' : 'выключен'}, защита в реальном времени ${d.realtime ? 'вкл' : 'выкл'}` + (d.activeThreats ? `, активных угроз: ${d.activeThreats}` : ', угроз нет');
+}
 function renderSecurity() {
   const ev = [...S.events].reverse();
   $('#evCount').textContent = ev.length;
@@ -239,8 +261,11 @@ function renderSecurity() {
   const b = Object.entries(S.bans);
   $('#banCount').textContent = b.length;
   $('#banRows').innerHTML = b.map(([ip, v]) => `<div class="row row--ban"><span class="mono">${esc(ip)}</span><span class="cut dim">${esc(v.reason)}</span><button class="link" data-unban="${esc(ip)}" type="button">Снять</button></div>`).join('') || '<p class="empty">Список пуст.</p>';
+  renderShield();
 }
 $('#banRows').onclick = async e => { const b = e.target.closest('[data-unban]'); if (b) { S.bans = await api('/bans', { method: 'DELETE', body: { ip: b.dataset.unban } }); renderSecurity(); } };
+$('#lockBtn').onclick = async () => { const r = await api('/lockdown', { method: 'POST', body: { on: !(S.lock && S.lock.on) } }); if (r.error) return toast(r.error, true); S.lock = r; renderShield(); };
+$('#defBtn').onclick = async () => { $('#defSub').textContent = 'Читаю статус Defender…'; const r = await api('/defender', { method: 'POST' }); if (r.status) { S.defender = r.status; renderShield(); } else if (r.error) $('#defSub').textContent = r.error; };
 $('#simBtn').onclick = () => api('/simulate', { method: 'POST' });
 $('#patrolBtn').onclick = async () => {
   const v = $('#verdict'), b = $('#patrolBtn'); b.disabled = true; v.classList.add('busy'); v.textContent = 'Sentinel читает журнал…';
@@ -254,16 +279,22 @@ async function renderModels() {
   await ensureModels(); const q = $('#mSearch').value.trim().toLowerCase(), k = S.quota || {};
   const list = models.filter(m => (m.id + m.name).toLowerCase().includes(q));
   $('#mCount').textContent = models.length;
-  const c = k.claude || {}, isCl = k.brain === 'claude';
-  $$('#brainBox [data-brain]').forEach(b => b.classList.toggle('on', b.dataset.brain === k.brain));
-  $('#brainState').textContent = isCl ? `Claude ${c.model} · ${c.used}/${c.cap} за час` : c.available ? 'бесплатные модели' : 'Claude не найден на этом компьютере';
+  const c = k.claude || {}, o = k.ollama || {}, brainSet = k.brainSetting || 'free';
+  $$('#brainBox [data-brain]').forEach(b => b.classList.toggle('on', b.dataset.brain === brainSet));
+  $$('#brainBox .brain__opt').forEach(el => el.classList.toggle('show', el.dataset.for === brainSet));
+  $('#brainState').textContent = brainSet === 'claude' ? (c.available ? `Claude ${c.model} · ${c.used}/${c.cap} за час` : 'Claude не найден — работают бесплатные модели')
+    : brainSet === 'ollama' ? (o.up ? `Ollama · ${o.model} · ${o.used} за час` : `Ollama недоступна (${o.base}) — работают бесплатные модели`)
+    : 'бесплатные модели OpenRouter';
   if (document.activeElement !== $('#clCap')) $('#clCap').value = c.cap ?? 600;
   $('#clModel').value = c.model || 'haiku';
-  $('#quotaNote').textContent = (isCl
-    ? `Агенты думают через Claude (твой вход в Claude Code на этом компьютере) — запросы расходуют лимиты твоего плана Claude, поэтому стоит потолок ${c.cap} запросов в час. Claude вызывается без инструментов: страница из интернета не может ничего запустить на ноутбуке. Если Claude недоступен, сервер сам переходит на бесплатные модели. `
+  if (document.activeElement !== $('#olModel')) $('#olModel').value = o.model || 'llama3.2';
+  $('#quotaNote').textContent = (brainSet === 'claude'
+    ? `Агенты думают через Claude (твой вход в Claude Code на этом ПК) — это расходует лимиты твоего плана Claude, поэтому стоит потолок ${c.cap} запросов в час. Модель вызывается без инструментов. `
+    : brainSet === 'ollama'
+    ? `Агенты думают через Ollama (${o.base}). Локальная Ollama (http://127.0.0.1:11434) — бесплатно и без лимита; облако ollama.com — с кредитами. ${o.up ? '' : 'Сейчас не отвечает, поэтому используются бесплатные модели OpenRouter. '}`
     : `Агенты думают через бесплатные модели OpenRouter (:free). `) +
     `Платные модели OpenRouter заблокированы на уровне сервера; бесплатных запросов сегодня ${k.used ?? 0} из ${k.cap ?? 0}. Когда лимиты кончаются, агенты продолжают ходить по сети на автопилоте.` +
-    (c.error ? ` Последняя ошибка Claude: ${c.error}` : '');
+    (brainSet === 'claude' && c.error ? ` Ошибка Claude: ${c.error}` : brainSet === 'ollama' && o.error ? ` Ошибка Ollama: ${o.error}` : '');
   $('#modelRows').innerHTML = list.map(m => `<div class="row row--model"><span class="cut">${esc(m.name)}</span><span class="mono dim cut">${esc(m.id)}</span><span class="mono dim">${m.ctx ? Math.round(m.ctx / 1000) + 'k ctx' : ''}</span></div>`).join('') || '<p class="empty">Модели не загружены — проверь ключ OpenRouter в .env.</p>';
 }
 $('#mSearch').oninput = renderModels;
@@ -271,6 +302,7 @@ const saveBrain = async body => { const r = await api('/settings', { method: 'PO
 $('#brainBox').onclick = e => { const b = e.target.closest('[data-brain]'); if (b) saveBrain({ brain: b.dataset.brain }); };
 $('#clModel').onchange = e => saveBrain({ claudeModel: e.target.value });
 $('#clCap').onchange = e => saveBrain({ claudePerHour: +e.target.value });
+$('#olModel').onchange = e => saveBrain({ ollamaModel: e.target.value.trim() || 'llama3.2' });
 
 // ---------- граф ----------
 const graph = (() => {
@@ -377,9 +409,12 @@ function connect() {
     $('#sActive').textContent = S.agents.filter(v => v.state && v.state !== 'idle').length;
   });
   es.addEventListener('agents', e => { S.agents = JSON.parse(e.data); renderAgents(); renderStrip(); graph.sync(); });
-  es.addEventListener('threat', e => { const ev = JSON.parse(e.data); S.events.push(ev); renderSecurity(); if (ev.kind !== 'ban') toast(`${ev.kind.toUpperCase()} · ${ev.ip}\n${ev.detail}`, true); });
+  es.addEventListener('threat', e => { const ev = JSON.parse(e.data); S.events.push(ev); if (S.events.length > 300) S.events.shift(); renderSecurity(); if (ev.kind !== 'ban') toast(`${ev.kind.toUpperCase()} · ${ev.ip}\n${ev.detail}`, true); });
   es.addEventListener('bans', e => { S.bans = JSON.parse(e.data); renderSecurity(); });
-  es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); });
+  es.addEventListener('sec', e => { S.sec = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
+  es.addEventListener('lock', e => { S.lock = JSON.parse(e.data); renderShield(); toast(S.lock.on ? '🛡 Карантин включён — внешний доступ закрыт' : 'Карантин снят', S.lock.on); });
+  es.addEventListener('defender', e => { S.defender = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
+  es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); if (location.hash === '#models') renderModels(); });
   es.addEventListener('settings', e => { S.settings = JSON.parse(e.data); renderStrip(); });
   es.addEventListener('sys', e => { S.sys = JSON.parse(e.data); });
 }
