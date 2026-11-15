@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readTelemetry } from './telemetry.mjs';
+import { readWindows } from './windows-events.mjs';
 import { createLiveFeed } from './live.mjs';
 import { join } from 'node:path';
 
@@ -15,6 +16,8 @@ const stateFile = join(folder, 'state.json');
 const inbox = join(root, 'telemetry', 'events.jsonl');
 mkdirSync(join(root, 'telemetry'), { recursive: true });
 const runtime = { lastTick: null, error: null };
+const windowsStatus = { lastTick: null, available: [], failed: [] };
+let readingWindows = false;
 const live = createLiveFeed();
 const limit = 100;
 const summaryQueue = new Set();
@@ -29,7 +32,9 @@ const types = {
   auth_failed: 'Отказ во входе',
   permission_changed: 'Изменение прав',
   outbound_flagged: 'Исходящий трафик',
-  service_ok: 'Штатная проверка'
+  service_ok: 'Штатная проверка',
+  windows_error: 'Ошибка Windows',
+  defender_detection: 'Обнаружение Защитника Windows'
 };
 const baseModel = { id: 'openrouter/free', label: 'Автовыбор бесплатной модели' };
 const saved = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : {};
@@ -42,9 +47,24 @@ let state = {
   cursor: saved.cursor || {}, monitoring: saved.monitoring ?? true, watched: saved.watched || 0,
   rejected: saved.rejected || 0,
   modelHistory: saved.modelHistory || {},
+  windowsCursor: saved.windowsCursor || {},
+  windowsRead: saved.windowsRead || 0,
+  windowsBootstrap: Boolean(saved.windowsBootstrap),
   agentStats: saved.agentStats || {},
   autoCalls: (saved.autoCalls || []).filter(at => at >= Date.now() - 86400000)
 };
+if (process.platform === 'win32' && !saved.windowsBootstrap) {
+  for (const [id, name, type] of [
+    ['windows-errors', 'Журнал Windows', 'windows_error'],
+    ['windows-defender', 'Защитник Windows', 'defender_detection']
+  ]) {
+    if (state.agents.length >= limit) break;
+    if (state.agents.some(agent => agent.id === id)) continue;
+    state.agents.push({ id, name, type, desc: types[type], enabled: true, threshold: 1,
+      mark: '◇', color: 'cyan', model: baseModel.id, allowBrief: true, autoBrief: false, source: '' });
+  }
+  state.windowsBootstrap = true;
+}
 let apiKey = process.env.OPENROUTER_API_KEY?.trim() || '';
 let models = [baseModel];
 let catalogFetchedAt = 0;
@@ -105,7 +125,9 @@ async function readJson(req) {
 function status() {
   return {
     ...runtime, monitoring: state.monitoring, watched: state.watched,
-    rejected: state.rejected, revision, queue: summaryQueue.size, briefing,
+    rejected: state.rejected,
+    windows: { enabled: process.platform === 'win32', ...windowsStatus, received: state.windowsRead },
+    revision, queue: summaryQueue.size, briefing,
     activeAgentId, operating: state.agentStats,
     autoCallsToday: state.autoCalls.filter(at => at >= Date.now() - 86400000).length
   };
@@ -256,6 +278,33 @@ function watch() {
   }
 }
 
+async function watchWindows() {
+  if (process.platform !== 'win32' || !state.monitoring || readingWindows) return;
+  readingWindows = true;
+  try {
+    const batch = await readWindows(state.windowsCursor);
+    if (!state.monitoring) return;
+    windowsStatus.lastTick = new Date().toISOString();
+    const statusChanged = batch.available.join() !== windowsStatus.available.join()
+      || batch.failed.join() !== windowsStatus.failed.join();
+    windowsStatus.available = batch.available;
+    windowsStatus.failed = batch.failed;
+    if (statusChanged && batch.available.length) {
+      live.publish('operation', 'Подключены журналы Windows: ' + batch.available.join(', '));
+    }
+    if (statusChanged && batch.failed.length) {
+      live.publish('operation', 'Недоступны журналы Windows: ' + batch.failed.join(', '));
+    }
+    if (batch.events.length) {
+      ingest(batch.events, { windowsCursor: batch.cursor, windowsRead: state.windowsRead + batch.events.length });
+    }
+  } catch {
+    live.publish('operation', 'Не удалось сохранить события Windows');
+  } finally {
+    readingWindows = false;
+  }
+}
+
 async function catalog() {
   if (Date.now() - catalogFetchedAt < 300000) return models;
   const response = await fetch('https://openrouter.ai/api/v1/models', {
@@ -391,7 +440,7 @@ const server = createServer(async (req, res) => {
       if (typeof body.enabled !== 'boolean') fail(400, 'Укажите режим наблюдения.');
       save({ ...state, monitoring: body.enabled });
       live.publish('operation', body.enabled ? 'Мониторинг запущен' : 'Мониторинг на паузе');
-      if (body.enabled) watch();
+      if (body.enabled) { watch(); void watchWindows(); }
       return reply(200, { enabled: state.monitoring });
     }
     if (path === '/api/toggle') {
@@ -447,6 +496,8 @@ server.listen(port, host, () => {
   console.log('UltraSquad • ' + origin);
   live.publish('operation', 'Локальный сервер запущен');
   watch();
+  void watchWindows();
   setInterval(watch, 1500).unref();
+  setInterval(watchWindows, 12000).unref();
   setInterval(() => runQueue().catch(() => live.publish('operation', 'Ошибка очереди сводок')), 2500).unref();
 });

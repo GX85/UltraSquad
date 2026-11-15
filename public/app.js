@@ -107,6 +107,15 @@
     $('#watch').dataset.enabled = String(!runtime.monitoring);
     $('#last-poll').textContent = runtime.monitoring && runtime.lastTick ? 'Проверка ' + times.format(new Date(runtime.lastTick)) : 'Пауза';
     $('#watch-count').textContent = runtime.error || ('Принято строк ' + runtime.watched + ' · Ошибок формата ' + runtime.rejected);
+    const windows = runtime.windows;
+    const label = $('#windows-status');
+    label.hidden = !windows?.enabled;
+    if (windows?.enabled) {
+      const available = windows.available.length ? windows.available.join(', ') : 'подключение';
+      const failed = windows.failed.length ? ' · Недоступны ' + windows.failed.join(', ') : '';
+      const checked = windows.lastTick ? ' · Опрос ' + times.format(new Date(windows.lastTick)) : '';
+      label.textContent = 'Журналы Windows · ' + available + ' · Получено ' + windows.received + checked + failed;
+    }
     $('#queue-state').textContent = 'В очереди ' + (runtime.queue || 0);
     const metrics = runtime.operating || {};
     const maximum = Math.max(1, ...Object.values(metrics).map(item => item.processed || 0));
