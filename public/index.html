@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UltraSquad</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="app">
+  <aside class="side">
+    <div class="logo"><span class="bolt">⚡</span><b>Ultra</b>Squad</div>
+    <nav>
+      <a data-v="dash" class="on"><i>◈</i>Обзор</a>
+      <a data-v="agents"><i>✦</i>Агенты</a>
+      <a data-v="sec"><i>◉</i>Охота</a>
+      <a data-v="models"><i>⬡</i>Модели</a>
+    </nav>
+    <div class="side-foot">
+      <div class="pill" id="keyState"><span class="dot"></span><span>OpenRouter</span></div>
+      <div class="pill" id="live"><span class="dot"></span><span>Live</span></div>
+    </div>
+  </aside>
+
+  <main>
+    <!-- ОБЗОР -->
+    <section id="dash" class="view on">
+      <h1>Командный центр</h1>
+      <div class="stats">
+        <div class="card stat"><small>Агентов онлайн</small><b data-c="agents">0</b></div>
+        <div class="card stat"><small>Угроз зафиксировано</small><b data-c="threats">0</b></div>
+        <div class="card stat"><small>IP в бане</small><b data-c="bans">0</b></div>
+        <div class="card stat"><small>RAM сервера</small><b data-c="mem">0</b><em>MB</em></div>
+      </div>
+      <div class="grid2">
+        <div class="card radar-card">
+          <h3>Радар угроз</h3>
+          <canvas id="radar" width="420" height="420"></canvas>
+        </div>
+        <div class="card">
+          <h3>Живая лента</h3>
+          <div id="feed" class="feed"></div>
+        </div>
+      </div>
+      <div class="card sys">
+        <h3>Система</h3>
+        <div class="bars" id="sysbars"></div>
+      </div>
+    </section>
+
+    <!-- АГЕНТЫ -->
+    <section id="agents" class="view">
+      <div class="head"><h1>Агенты</h1><button class="btn" id="newAgent">＋ Новый агент</button></div>
+      <div id="agentGrid" class="agent-grid"></div>
+    </section>
+
+    <!-- ОХОТА -->
+    <section id="sec" class="view">
+      <div class="head"><h1>Охота на хакеров</h1>
+        <div><button class="btn ghost" id="sim">Имитировать атаку</button>
+        <button class="btn" id="hunt">🛡️ Запустить Sentinel</button></div></div>
+      <div class="grid2">
+        <div class="card"><h3>Ловушки и сигнатуры</h3>
+          <p class="muted">Сервер маскирует приманки (<code>/wp-login.php</code>, <code>/.env</code>, <code>/phpmyadmin</code>…), ловит сканеры, SQLi/XSS/path-traversal, флуд — и банит источник автоматически.</p>
+          <h3 style="margin-top:18px">Забаненные IP</h3><div id="banList" class="list"></div></div>
+        <div class="card"><h3>Вердикт Sentinel</h3><div id="verdict" class="verdict muted">Нажми «Запустить Sentinel», чтобы агент проанализировал журнал.</div></div>
+      </div>
+      <div class="card" style="margin-top:18px"><h3>Журнал событий</h3><div id="log" class="list"></div></div>
+    </section>
+
+    <!-- МОДЕЛИ -->
+    <section id="models" class="view">
+      <div class="head"><h1>Модели OpenRouter</h1><input id="mq" class="inp" placeholder="Поиск модели…"></div>
+      <div id="modelList" class="list models"></div>
+    </section>
+  </main>
+</div>
+
+<!-- Редактор агента -->
+<div class="modal" id="modal"><div class="sheet">
+  <div class="sheet-head"><h2 id="mTitle">Агент</h2><button class="x" id="mClose">✕</button></div>
+  <div class="form">
+    <div class="row"><label>Иконка<input id="fIcon" class="inp" maxlength="2"></label><label>Имя<input id="fName" class="inp"></label><label>Цвет<input id="fColor" type="color" class="inp"></label></div>
+    <label>Роль<input id="fRole" class="inp"></label>
+    <label>Модель<input id="fModel" class="inp" list="modelOpts"><datalist id="modelOpts"></datalist></label>
+    <label>Температура: <span id="tVal"></span><input id="fTemp" type="range" min="0" max="1.5" step="0.1"></label>
+    <label>Системный промпт<textarea id="fPrompt" class="inp" rows="4"></textarea></label>
+    <div><div class="lbl">Разрешения</div><div id="fPerms" class="perms"></div></div>
+  </div>
+  <div class="sheet-foot"><button class="btn danger" id="mDel">Удалить</button><button class="btn" id="mSave">Сохранить</button></div>
+</div></div>
+
+<!-- Чат с агентом -->
+<div class="modal" id="chatModal"><div class="sheet chat">
+  <div class="sheet-head"><h2 id="cTitle">Чат</h2><button class="x" id="cClose">✕</button></div>
+  <div id="msgs" class="msgs"></div>
+  <form id="cForm" class="cform"><input id="cIn" class="inp" placeholder="Напиши задачу агенту…" autocomplete="off"><button class="btn">Отправить</button></form>
+</div></div>
+
+<div id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>
