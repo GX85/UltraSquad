@@ -141,10 +141,28 @@
     <section class="view" id="v-security">
       <div class="sec">
         <div class="sec__col">
+          <div class="pane shield" id="shield">
+            <div class="shield__top">
+              <div class="gauge" id="gauge"><svg viewBox="0 0 120 120"><circle class="gauge__bg" cx="60" cy="60" r="52"/><circle class="gauge__fg" id="gaugeFg" cx="60" cy="60" r="52"/></svg><div class="gauge__num"><b id="scoreNum">—</b><span>защита</span></div></div>
+              <div class="shield__meta">
+                <p class="shield__state" id="shieldState">Под контролем</p>
+                <p class="shield__sub" id="shieldSub">Угроз за час: 0 · в бане: 0</p>
+                <div class="chips" id="kindChips"></div>
+              </div>
+            </div>
+            <div class="lockrow" id="lockRow">
+              <div><b id="lockTitle">Карантин выключен</b><span class="dim" id="lockSub">Включится сам при массовой атаке</span></div>
+              <button class="btn btn--sm" id="lockBtn" type="button">Включить карантин</button>
+            </div>
+          </div>
           <div class="pane">
             <div class="pane__head"><span>Вердикт Sentinel</span>
               <div class="tools"><button class="btn btn--ghost btn--sm" id="simBtn" type="button">Имитация атаки</button><button class="btn btn--solid btn--sm" id="patrolBtn" type="button">Патруль</button></div></div>
-            <div class="pad"><p class="verdict" id="verdict">Сервер держит ловушки (/wp-login.php, /.env, /phpmyadmin…), ловит сканеры, SQL-инъекции, XSS и флуд. Источник банится сразу, Sentinel поднимает тревогу в чате отряда и зовёт подмогу.</p></div>
+            <div class="pad"><p class="verdict" id="verdict">Запусти патруль, чтобы проверить состояние Windows и журнал запросов.</p></div>
+          </div>
+          <div class="pane">
+            <div class="pane__head"><span>Microsoft Defender</span><button id="scanBtn" class="btn btn--ghost btn--sm" type="button" disabled>Быстрая проверка</button></div>
+            <div class="pad"><p class="verdict" id="defenderStatus" role="status">Читаем статус Windows…</p></div>
           </div>
           <div class="pane grow">
             <div class="pane__head"><span>Заблокированные IP</span><span class="dim" id="banCount">0</span></div>
@@ -152,7 +170,8 @@
           </div>
         </div>
         <div class="pane">
-          <div class="pane__head"><span>Журнал угроз</span><span class="dim" id="evCount">0</span></div>
+          <div class="pane__head"><span>Журнал угроз</span>
+            <div class="tools"><span class="dim" id="evCount">0</span><a class="btn btn--ghost btn--sm" id="exportBtn" href="/api/export" download>Выгрузить</a></div></div>
           <div class="rows" id="evRows"></div>
         </div>
       </div>
@@ -163,9 +182,10 @@
       <div class="pane apane">
         <div class="pane__head"><span>Мозг агентов</span><span class="dim" id="brainState"></span></div>
         <div class="brain" id="brainBox">
-          <div class="seg"><button type="button" data-brain="free">Бесплатные модели</button><button type="button" data-brain="claude">Claude</button></div>
-          <label class="brain__opt">Модель Claude<select class="field field--sm" id="clModel"><option value="haiku">Haiku — быстрая</option><option value="sonnet">Sonnet — умнее</option></select></label>
-          <label class="brain__opt">Запросов в час<input class="field field--num" id="clCap" type="number" min="30" max="3000" step="30"></label>
+          <div class="seg"><button type="button" data-brain="free">Бесплатные модели</button><button type="button" data-brain="ollama">Ollama</button><button type="button" data-brain="claude">Claude</button></div>
+          <label class="brain__opt" data-for="claude">Модель Claude<select class="field field--sm" id="clModel"><option value="haiku">Haiku — быстрая</option><option value="sonnet">Sonnet — умнее</option></select></label>
+          <label class="brain__opt" data-for="claude">Запросов в час<input class="field field--num" id="clCap" type="number" min="30" max="3000" step="30"></label>
+          <label class="brain__opt" data-for="ollama">Модель Ollama<input class="field field--sm" id="olModel" placeholder="llama3.2"></label>
         </div>
         <p class="note" id="quotaNote"></p>
         <div class="pane__head"><span>Бесплатные модели OpenRouter · <span id="mCount">0</span></span>
