@@ -78,6 +78,8 @@ if (!saved.room) {
   }).sort((a, b) => a.time.localeCompare(b.time));
 }
 let apiKey = process.env.OPENROUTER_API_KEY?.trim() || '';
+const localPrefix = 'ollama-local:';
+const localBase = 'http://127.0.0.1:11434/api';
 let models = [baseModel];
 let catalogFetchedAt = 0;
 let briefing = false;
@@ -237,7 +239,7 @@ function ingest(rows, changes = {}) {
   if (fresh.length) live.publish('input', 'Принято событий: ' + fresh.length + ' · Сигналов: ' + matches.size);
   for (const { agent, processed, flagged } of runs) {
     live.publish(flagged ? 'alert' : 'analysis', 'Проверено: ' + processed + ' · Сигналов: ' + flagged + ' · Порог: ' + agent.threshold + ' за 10 мин', agent.name);
-    if (flagged && apiKey && agent.allowBrief && agent.autoBrief) summaryQueue.add(agent.id);
+    if (flagged && modelReady(agent) && agent.allowBrief && agent.autoBrief) summaryQueue.add(agent.id);
   }
   return { added: fresh.length, flagged: matches.size };
 }
@@ -358,6 +360,19 @@ async function watchWindows() {
   }
 }
 
+function modelReady(agent) {
+  return agent.model.startsWith(localPrefix) || Boolean(apiKey);
+}
+
+async function localModels() {
+  const response = await fetch(localBase + '/tags', { redirect: 'error', signal: AbortSignal.timeout(2500) });
+  if (!response.ok) throw new Error('Ollama catalog');
+  const result = await response.json();
+  return (result.models || []).filter(item => typeof item.name === 'string'
+    && !/cloud/i.test(item.name) && !item.remote_host && !item.remote_model && item.size > 0)
+    .map(item => ({ id: localPrefix + item.name, label: 'Ollama · ' + item.name }));
+}
+
 async function catalog() {
   if (Date.now() - catalogFetchedAt < 300000) return models;
   const response = await fetch('https://openrouter.ai/api/v1/models', {
@@ -377,13 +392,17 @@ async function catalog() {
 async function makeBrief(agentId, automatic = false) {
   const agent = state.agents.find(item => item.id === agentId && item.enabled);
   if (!agent?.allowBrief) fail(400, 'Запустите агента и разрешите сводки в его настройках.');
-  if (!apiKey) fail(400, 'Подключите ключ в разделе «Модели».');
+  const local = agent.model.startsWith(localPrefix);
+  const provider = local ? 'Ollama' : 'OpenRouter';
+  if (!modelReady(agent)) fail(400, 'Подключите ключ OpenRouter в разделе «Модели».');
   if (briefing) fail(409, 'Сводка уже формируется.');
-  if (agent.model !== baseModel.id && !(await catalog().catch(() => [])).some(model => model.id === agent.model)) {
-    fail(409, 'Эта бесплатная модель сейчас недоступна. Выберите автовыбор или обновите каталог.');
+  const offers = local ? await localModels().catch(() => [])
+    : agent.model === baseModel.id ? [baseModel] : await catalog().catch(() => []);
+  if ((local || agent.model !== baseModel.id) && !offers.some(model => model.id === agent.model)) {
+    fail(409, local ? 'Модель Ollama недоступна. Проверьте приложение Ollama и обновите каталог.' : 'Эта бесплатная модель сейчас недоступна. Выберите автовыбор или обновите каталог.');
   }
   if (briefing) fail(409, 'Сводка уже формируется.');
-  if (!apiKey || !state.agents.includes(agent) || (automatic && (!state.monitoring || !agent.autoBrief))) {
+  if (!modelReady(agent) || !state.agents.includes(agent) || (automatic && (!state.monitoring || !agent.autoBrief))) {
     fail(409, 'Настройки агента изменились. Повторите запрос.');
   }
   const events = state.events.filter(event => event.type === agent.type && (!agent.source || event.source === agent.source));
@@ -394,25 +413,28 @@ async function makeBrief(agentId, automatic = false) {
   activeAgentId = agent.id;
   live.publish('model', 'Запрошена сводка · ' + agent.model, agent.name);
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(35000),
-      headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: agent.model, max_tokens: 1100, messages: [
-        { role: 'user', content: 'Кратко, по-русски опиши эти счётчики и подскажи, что проверить в собственном журнале. Не называй виновников. Категория и счётчики: ' + JSON.stringify({ category: types[agent.type], ...stats }) }
-      ] })
+    const messages = [{ role: 'user', content: 'Кратко, по-русски опиши эти счётчики и подскажи, что проверить в собственном журнале. Не называй виновников. Категория и счётчики: ' + JSON.stringify({ category: types[agent.type], ...stats }) }];
+    const headers = { 'Content-Type': 'application/json' };
+    if (!local) headers.Authorization = 'Bearer ' + apiKey;
+    const body = local
+      ? { model: agent.model.slice(localPrefix.length), stream: false, options: { num_predict: 600 }, messages }
+      : { model: agent.model, max_tokens: 1100, messages };
+    const response = await fetch(local ? localBase + '/chat' : 'https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(local ? 90000 : 35000), headers,
+      body: JSON.stringify(body)
     });
-    if (response.status === 401 || response.status === 403) fail(502, 'OpenRouter отклонил ключ или доступ.');
-    if (response.status === 429) fail(429, 'OpenRouter ограничил частоту запросов. Попробуйте позже.');
-    if (!response.ok) fail(502, 'OpenRouter вернул HTTP ' + response.status + '.');
+    if (response.status === 401 || response.status === 403) fail(502, provider + ' отклонил доступ.');
+    if (response.status === 429) fail(429, provider + ' ограничил частоту запросов. Попробуйте позже.');
+    if (!response.ok) fail(502, provider + ' вернул HTTP ' + response.status + '.');
     const result = await response.json();
-    const answer = result.choices?.[0]?.message?.content?.trim();
+    const answer = (local ? result.message?.content : result.choices?.[0]?.message?.content)?.trim();
     if (!answer) {
       const choice = result.choices?.[0];
       if (choice?.finish_reason === 'length') fail(502, 'Модель исчерпала лимит ответа. Выберите другую бесплатную модель.');
       if (result.error || choice?.error || choice?.finish_reason === 'error') fail(502, 'Провайдер модели вернул ошибку. Выберите другую бесплатную модель.');
       fail(502, 'Модель не вернула текст. Выберите другой бесплатный вариант.');
     }
-    const brief = { agent: agent.name, model: result.model || agent.model, time: new Date().toISOString(), text: answer.slice(0, 5000) };
+    const brief = { agent: agent.name, model: local ? agent.model : result.model || agent.model, time: new Date().toISOString(), text: answer.slice(0, 5000) };
     if (state.agents.some(item => item.id === agent.id)) {
       save({ ...state, brief, modelHistory: { ...state.modelHistory, [agent.id]: brief },
         room: appendRoom([roomPost(agent.name, 'summary', brief.text)]) });
@@ -420,9 +442,9 @@ async function makeBrief(agentId, automatic = false) {
     live.publish('model', 'Получена сводка · ' + brief.model, agent.name);
     return brief;
   } catch (error) {
-    live.publish('model', error.status ? error.message : 'Запрос к OpenRouter не завершился.', agent.name);
+    live.publish('model', error.status ? error.message : 'Запрос к ' + provider + ' не завершился.', agent.name);
     if (error.status) throw error;
-    fail(502, 'Запрос к OpenRouter не завершился.');
+    fail(502, 'Запрос к ' + provider + ' не завершился.');
   } finally {
     activeAgentId = null;
     briefing = false;
@@ -430,13 +452,13 @@ async function makeBrief(agentId, automatic = false) {
 }
 
 async function runQueue() {
-  if (briefing || !apiKey || !state.monitoring || !summaryQueue.size || Date.now() - lastAuto < 18000) return;
+  if (briefing || !state.monitoring || !summaryQueue.size || Date.now() - lastAuto < 18000) return;
   const calls = state.autoCalls.filter(at => at >= Date.now() - 86400000);
   if (calls.length >= 36) return;
   const [id] = summaryQueue;
   summaryQueue.delete(id);
   const agent = state.agents.find(item => item.id === id);
-  if (!agent?.enabled || !agent.allowBrief || !agent.autoBrief) return;
+  if (!agent?.enabled || !agent.allowBrief || !agent.autoBrief || !modelReady(agent)) return;
   lastAuto = Date.now();
   save({ ...state, autoCalls: [...calls, lastAuto] });
   try {
@@ -531,15 +553,18 @@ const server = createServer(async (req, res) => {
       if (typeof body.key !== 'string' || (body.key !== '' && !/^sk-or-v1-[\da-f]{64}$/i.test(body.key))) fail(400, 'Проверьте формат ключа OpenRouter.');
       apiKey = body.key;
       revision++;
-      if (!apiKey) summaryQueue.clear();
+      if (!apiKey) for (const id of summaryQueue) {
+        const agent = state.agents.find(item => item.id === id);
+        if (agent && !modelReady(agent)) summaryQueue.delete(id);
+      }
       return reply(200, { connected: Boolean(apiKey) });
     }
     if (path === '/api/models') {
-      try {
-        return reply(200, { models: await catalog() });
-      } catch {
-        fail(502, 'Каталог OpenRouter временно недоступен.');
-      }
+      const [router, ollama] = await Promise.allSettled([catalog(), localModels()]);
+      return reply(200, { models: [
+        ...(router.status === 'fulfilled' ? router.value : [baseModel]),
+        ...(ollama.status === 'fulfilled' ? ollama.value : [])
+      ], ollamaAvailable: ollama.status === 'fulfilled', routerAvailable: router.status === 'fulfilled' });
     }
     if (path === '/api/brief') return reply(200, await makeBrief(body.id));
     if (path === '/api/review') {
@@ -553,7 +578,9 @@ const server = createServer(async (req, res) => {
     if (!agent || typeof body.allowBrief !== 'boolean' || typeof body.autoBrief !== 'boolean' || typeof body.source !== 'string'
         || (body.source && !/^[\p{L}\p{N} _.-]{1,40}$/u.test(body.source)) || !Number.isInteger(body.threshold)
         || body.threshold < 1 || body.threshold > 50
-        || (body.model !== agent.model && !models.some(model => model.id === body.model))) {
+        || (body.model !== agent.model && !models.some(model => model.id === body.model)
+          && !(typeof body.model === 'string' && body.model.startsWith(localPrefix)
+            && (await localModels().catch(() => [])).some(model => model.id === body.model)))) {
       fail(400, 'Проверьте модель, переключатель и порог от 1 до 50.');
     }
     const agents = state.agents.map(item => item.id === agent.id

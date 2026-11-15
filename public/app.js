@@ -81,7 +81,7 @@
       '<label>Порог событий<input name="threshold" type="number" min="1" max="50" value="' + agent.threshold + '" required></label>',
       '<label>Источник<input name="source" maxlength="40" value="' + escape(agent.source) + '" placeholder="Все источники"></label>',
       '<label class="wide">Бесплатная модель<select name="model">' + modelOptions(agent) + '</select></label>',
-      '<label class="toggle wide"><input name="allowBrief" type="checkbox"' + (agent.allowBrief ? ' checked' : '') + '>Разрешить сводки OpenRouter</label>',
+      '<label class="toggle wide"><input name="allowBrief" type="checkbox"' + (agent.allowBrief ? ' checked' : '') + '>Разрешить сводки</label>',
       '<label class="toggle wide"><input name="autoBrief" type="checkbox"' + (agent.autoBrief ? ' checked' : '') + '>Запрашивать сводку при новом сигнале</label>',
       '<p class="muted wide">Автосводки используют общую очередь, до 36 запросов за сутки.</p>',
       '<div class="actions"><button type="submit">Сохранить</button><button type="button" data-brief="' + escape(agent.id) + '"' + (disabledBrief ? ' disabled' : '') + '>Сводка ↗</button><button type="button" class="ghost delete" data-remove="' + escape(agent.id) + '">Удалить</button></div>',
@@ -358,7 +358,8 @@
     const result = await api('models', {});
     models = result.models;
     render();
-    notify('Каталог бесплатных моделей обновлён.');
+    $('#ollama-model-state').textContent = result.ollamaAvailable ? 'Ollama подключена на этом компьютере.' : 'Локальная Ollama недоступна на этом компьютере.';
+    notify(result.routerAvailable ? 'Каталог обновлён.' : 'Каталог OpenRouter временно недоступен.', !result.routerAvailable);
   }));
   async function poll() {
     if (busy || polling || document.hidden) return;

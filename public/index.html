@@ -67,7 +67,7 @@
         </div>
         <div id="agent-editor"></div>
       </div>
-      <section class="brief-panel"><div class="section-head"><h2>Сводка модели</h2></div><p class="muted">В OpenRouter передаются категория и три счётчика выбранного агента.</p><div id="brief"></div></section>
+      <section class="brief-panel"><div class="section-head"><h2>Сводка модели</h2></div><p class="muted">Выбранная модель получает категорию и три счётчика агента.</p><div id="brief"></div></section>
     </section>
     <section id="code" class="page" hidden>
       <div class="headline"><div><h1>Ревью кода</h1><p class="intro">Локальная проверка JavaScript по пяти правилам. Совпадения требуют ручной проверки.</p></div></div>
@@ -109,14 +109,14 @@
     </section>
     <section id="models" class="page" hidden>
       <div class="headline"><h1>Модели</h1><button id="models-refresh">Обновить каталог ↻</button></div>
-      <p class="intro">Бесплатные текстовые модели OpenRouter. Провайдеры устанавливают лимиты запросов.</p>
+      <p class="intro">Бесплатные модели OpenRouter и установленные модели локальной Ollama.</p>
       <div class="model-layout">
         <section class="model-connection">
-          <h2>Подключение</h2><p id="model-state"></p>
+          <h2>OpenRouter</h2><p id="model-state"></p>
           <form id="key-form"><label for="key">API-ключ</label><input id="key" type="password" autocomplete="off" spellcheck="false" required><div class="actions"><button>Подключить</button><button type="button" class="ghost" id="disconnect">Отключить</button></div></form>
           <p class="muted">Ключ хранится в памяти сервера до остановки.</p>
         </section>
-        <section><h2>Бесплатный каталог</h2><p class="muted">Выберите модель в настройках агента.</p><ul id="model-list"></ul></section>
+        <section><h2>Бесплатный каталог</h2><p class="muted">Выберите модель в настройках агента.</p><p id="ollama-model-state" class="muted">Обновите каталог, чтобы найти локальную Ollama.</p><ul id="model-list"></ul></section>
       </div>
     </section>
     <input type="file" id="file" accept=".json,application/json" hidden>
