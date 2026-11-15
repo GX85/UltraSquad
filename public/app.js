@@ -321,5 +321,6 @@ function connect() {
   graph.sync(); liveLog.forEach(e => onLive(e, true));
   const last = [...liveLog].reverse().find(e => e.type === 'page' || e.type === 'search'); if (last) show(last);
   renderStrip(); renderAgents(); renderSecurity(); renderTiles(); connect();
+  if (location.hash === '#models') renderModels();
   if (!s.keyOk) toast('Ключ OpenRouter не найден в .env — агенты работают на автопилоте', true);
 })();
