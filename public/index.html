@@ -85,10 +85,12 @@
         <div class="room-toolbar"><label for="room-filter">Сообщения</label><select id="room-filter"><option value="all">Все</option><option value="incidents">Сигналы и подмога</option></select></div>
         <div id="room-feed" class="room-feed" role="log" aria-live="polite" aria-relevant="additions text"><p class="empty">Ожидание сообщений</p></div>
         <form id="room-form" class="room-form">
-          <label class="visually-hidden" for="room-note">Заметка оператора</label>
-          <input id="room-note" name="text" maxlength="800" placeholder="Заметка оператора" required>
-          <button type="submit">Отправить</button>
+          <label>Кому<select id="room-agent"><option value="">Все активные агенты</option></select></label>
+          <label>Действие<select id="room-mode"><option value="status">Узнать статус</option><option value="search">Проверить журнал</option></select></label>
+          <label>Сообщение или запрос<input id="room-note" name="text" maxlength="800" placeholder="Что проверили?" required></label>
+          <button class="primary-gold" type="submit">Отправить агенту ↗</button>
         </form>
+        <div class="room-shortcuts"><button type="button" data-room-action="status">Узнать статус</button><button type="button" data-room-action="search">Открыть проверку журнала</button></div>
       </div>
     </section>
     <section id="live" class="page" hidden>

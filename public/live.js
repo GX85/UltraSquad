@@ -38,6 +38,7 @@
   }
   stream.onopen = () => { status.textContent = paused ? 'Лента на паузе · Сервер подключён' : 'Трансляция подключена'; };
   stream.onerror = () => { status.textContent = 'Соединение прервано · Переподключение'; };
+  stream.addEventListener('state', () => document.dispatchEvent(new Event('ultrasquad:state')));
   stream.onmessage = event => {
     let item;
     try { item = JSON.parse(event.data); } catch { return; }

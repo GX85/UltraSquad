@@ -96,7 +96,7 @@
       : '<p class="empty">Сводка появится после запроса к модели.</p>';
   }
   const roomKinds = { note: 'Заметка', report: 'Отчёт', signal: 'Сигнал', request: 'Запрос подмоги',
-    support: 'Сверка', summary: 'Сводка модели', code: 'Ревью' };
+    support: 'Сверка', summary: 'Сводка модели', code: 'Ревью', question: 'Запрос', reply: 'Ответ' };
   function supportButton(eventId) {
     return '<button type="button" class="ghost support-button" data-support="' + escape(eventId) + '">Вызвать подмогу</button>';
   }
@@ -196,6 +196,11 @@
     if (!dirty || options.forceEditor) renderEditor();
     else renderBrief();
     renderEvents();
+    const recipients = $('#room-agent');
+    const previousRecipient = recipients.value;
+    recipients.innerHTML = '<option value="">Все активные агенты</option>'
+      + state.agents.filter(agent => agent.enabled).map(agent => '<option value="' + escape(agent.id) + '">' + escape(agent.name) + '</option>').join('');
+    if ([...recipients.options].some(option => option.value === previousRecipient)) recipients.value = previousRecipient;
     renderRoom();
     renderRuntime();
     window.updateSignal(state.events);
@@ -277,14 +282,47 @@
     });
   });
   $('#room-filter').addEventListener('change', () => { if (state) renderRoom(); });
+  document.querySelector('.room-shortcuts').addEventListener('click', event => {
+    const button = event.target.closest('[data-room-action]');
+    if (!button) return;
+    const mode = $('#room-mode');
+    mode.value = button.dataset.roomAction;
+    mode.dispatchEvent(new Event('change'));
+    const field = $('#room-note');
+    if (mode.value === 'status' && !field.value.trim()) {
+      field.value = 'Что вы проверили?';
+      $('#room-form').requestSubmit($('#room-form button'));
+    } else field.focus();
+  });
+  $('#room-mode').addEventListener('change', event => {
+    $('#room-note').placeholder = event.target.value === 'search' ? 'Источник или событие' : 'Что проверили?';
+  });
   $('#room-form').addEventListener('submit', event => {
     event.preventDefault();
     const field = $('#room-note');
+    const mode = $('#room-mode').value;
+    const query = mode === 'search' ? field.value.trim() : '';
     run(event.submitter, async () => {
-      await api('room-note', { text: field.value });
+      if (mode === 'search') {
+        if (query.length > 100) throw new Error('Запрос должен быть короче 101 символа.');
+        location.hash = 'events';
+        const search = $('#search');
+        search.value = '';
+        $('#filter').value = '';
+        const step = Math.max(1, Math.ceil(query.length / 6));
+        for (let end = step; end < query.length + step; end += step) {
+          search.value = query.slice(0, end);
+          search.dispatchEvent(new Event('input'));
+          if (end < query.length && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            await new Promise(resolve => setTimeout(resolve, 32));
+          }
+        }
+      }
+      await api('room-ask', { text: field.value, agentId: $('#room-agent').value, mode, query });
       field.value = '';
       $('#room-filter').value = 'all';
       await refresh();
+      location.hash = 'chat';
       $('#room-feed').scrollTop = $('#room-feed').scrollHeight;
     });
   });
@@ -374,6 +412,7 @@
       $('#watch').disabled = true;
     } finally { polling = false; }
   }
+  document.addEventListener('ultrasquad:state', () => { void poll(); });
   window.addEventListener('hashchange', navigate);
   $('#local-host').textContent = location.host;
   navigate();

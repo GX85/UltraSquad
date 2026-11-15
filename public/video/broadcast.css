@@ -8,3 +8,13 @@ button{border-radius:11px;background:#a4bcf22b;border-color:#a9bef052;transition
 button:hover{background:#a4bcf244}
 button:active:not(:disabled){transform:scale(.97)}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
+
+:root { --surface:#2e2618b8; --line:#c5a36755; --dim:#cbb892; --white:#fff0cc; }
+body { background:radial-gradient(ellipse at 76% -20%,#654722,transparent 58%),#15100a; background-attachment:fixed; }
+button { border-color:#e3b66955; background:#b38c432e; }
+button:hover { background:#bd964f56; }
+.broadcast-actions { display:flex; gap:10px; flex-wrap:wrap; }
+#start { color:#201707; font-weight:700; background:linear-gradient(135deg,#ffe0a0,#cca053); }
+.connect textarea { background:#1b160f; border-color:#e3b66955; }
+@media(prefers-reduced-motion:no-preference) { main { animation:video-arrive .42s ease-out both; } }
+@keyframes video-arrive { from { opacity:.25; transform:translateY(12px); } to { opacity:1; transform:none; } }

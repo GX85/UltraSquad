@@ -15,6 +15,12 @@ export function createLiveFeed() {
       else write(res, item);
     }
   }
+  function publishState(revision) {
+    for (const res of clients) {
+      if (res.writableLength > 128 * 1024) res.destroy();
+      else res.write('event: state\ndata: ' + revision + '\n\n');
+    }
+  }
   function subscribe(req, res) {
     if (clients.size >= 12) {
       res.writeHead(503);
@@ -35,5 +41,5 @@ export function createLiveFeed() {
       else res.write(': heartbeat\n\n');
     }
   }, 12000).unref();
-  return { publish, subscribe };
+  return { publish, publishState, subscribe };
 }

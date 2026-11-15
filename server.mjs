@@ -113,6 +113,7 @@ function save(next) {
   renameSync(temp, stateFile);
   state = next;
   revision++;
+  live.publishState(revision);
 }
 
 async function readJson(req) {
@@ -250,6 +251,37 @@ function roomPost(author, kind, text, eventId) {
 function appendRoom(posts) {
   return [...state.room, ...posts].slice(-200);
 }
+function askRoom(body) {
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  if (!text || text.length > 800) fail(400, 'Напишите сообщение длиной от 1 до 800 символов.');
+  const mode = body.mode || 'status';
+  if (mode !== 'status' && mode !== 'search') fail(400, 'Выберите действие.');
+  const query = mode === 'search' && typeof body.query === 'string'
+    ? body.query.trim().toLocaleLowerCase('ru') : '';
+  if (mode === 'search' && (!query || query.length > 100)) fail(400, 'Укажите фильтр журнала до 100 символов.');
+  const agents = state.agents.filter(agent => agent.enabled && (!body.agentId || agent.id === body.agentId));
+  if (!agents.length) fail(409, 'Выберите работающего агента.');
+  const posts = [roomPost('Оператор', 'question', text)];
+  for (const agent of agents) {
+    const events = state.events.filter(event => event.type === agent.type && (!agent.source || event.source === agent.source));
+    const metrics = state.agentStats[agent.id];
+    const matches = events.filter(event => [event.source, types[event.type], event.agent]
+      .some(value => String(value || '').toLocaleLowerCase('ru').includes(query)));
+    const active = matches.filter(event => event.status === 'new'
+      && (event.matches?.includes(agent.id) ?? event.agent === agent.name));
+    const latest = matches[0];
+    const info = mode === 'search'
+      ? 'Проверил сохранённый журнал по запросу «' + query + '». Совпадений в моей категории: ' + matches.length
+        + ' · Открытых сигналов: ' + active.length + (latest ? ' · Последний источник: ' + latest.source : '') + '.'
+      : 'Категория: ' + types[agent.type] + ' · Обработано: ' + (metrics?.processed || 0)
+        + ' · Открытых сигналов: ' + active.length + ' · '
+        + (metrics?.lastRun ? 'Последняя обработка ' + new Date(metrics.lastRun).toISOString() : 'Пока ожидаю события по правилу') + '.';
+    posts.push(roomPost(agent.name, 'reply', info));
+  }
+  save({ ...state, room: appendRoom(posts) });
+  return { posts };
+}
+
 function requestSupport(eventId) {
   const event = state.events.find(item => item.id === eventId && item.agent);
   if (!event) fail(404, 'Сигнал больше не доступен в журнале.');
@@ -490,7 +522,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/api/state') return reply(200, snapshot());
     if (req.method === 'GET' && path === '/api/runtime') return reply(200, status());
     if (req.method === 'GET' && path === '/api/live') return live.subscribe(req, res);
-    const routes = ['/api/demo', '/api/import', '/api/agents', '/api/review', '/api/models', '/api/watch', '/api/toggle', '/api/add-agents', '/api/remove-agent', '/api/key', '/api/brief', '/api/room-note', '/api/support', '/api/source-review'];
+    const routes = ['/api/demo', '/api/import', '/api/agents', '/api/review', '/api/models', '/api/watch', '/api/toggle', '/api/add-agents', '/api/remove-agent', '/api/key', '/api/brief', '/api/room-note', '/api/support', '/api/source-review', '/api/room-ask'];
     if (req.method !== 'POST' || !routes.includes(path)) fail(404, 'Страница не найдена.');
     const body = await readJson(req);
     if (path === '/api/demo') return reply(200, demo());
@@ -509,6 +541,7 @@ const server = createServer(async (req, res) => {
       live.publish('analysis', 'Локальное ревью кода · Замечаний: ' + findings.length, 'Ревью кода');
       return reply(200, { findings });
     }
+    if (path === '/api/room-ask') return reply(200, askRoom(body));
     if (path === '/api/room-note') {
       const text = typeof body.text === 'string' ? body.text.trim() : '';
       if (!text || text.length > 800) fail(400, 'Напишите заметку длиной от 1 до 800 символов.');

@@ -71,3 +71,15 @@ footer a:hover { color: var(--dim); }
 .chip,.action,.outline{border-radius:12px;border:1px solid rgb(205 224 255 / .19);backdrop-filter:blur(18px) saturate(124%);box-shadow:0 10px 35px rgb(0 0 0 / .25),inset 0 1px rgb(255 255 255 / .07)}
 .action{transition:color .25s ease,background .25s ease,transform .25s var(--ease)}
 .action:active{transform:scale(.98)}
+
+.hero__scrim { background: linear-gradient(to right,transparent 0 38%,#130b01b0 73%,#100a02e0),linear-gradient(to bottom,#100a03aa,transparent 28% 72%,#100a03cc); }
+.chip,.action,.outline { border-color: #f3cb7955; color:#ffe8b4; }
+.action.solid { background: #b98b4a5c; }
+.action.solid:hover { background:#c6995b86; }
+@keyframes hero-arrival { from { opacity:.08; transform:translateY(18px); filter:blur(7px); } to { opacity:1; transform:none; filter:blur(0); } }
+@media(prefers-reduced-motion:no-preference) {
+  .entry > * { animation:hero-arrival .65s var(--ease) both; }
+  .entry > :nth-child(2) { animation-delay:.07s; }
+  .entry > :nth-child(3) { animation-delay:.13s; }
+  .entry > :nth-child(4) { animation-delay:.18s; }
+}

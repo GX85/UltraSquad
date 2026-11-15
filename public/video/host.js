@@ -29,14 +29,14 @@ function text(value, x, y, size, color, maxWidth) {
 
 function draw() {
   const now = Date.now();
-  ctx.fillStyle = '#0e1015';
+  ctx.fillStyle = '#141109';
   ctx.fillRect(0, 0, 1280, 720);
   const glow = ctx.createLinearGradient(0, 0, 850, 520);
-  glow.addColorStop(0, '#222832');
-  glow.addColorStop(1, '#101116');
+  glow.addColorStop(0, '#463316');
+  glow.addColorStop(1, '#1b150c');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, 1280, 213);
-  ctx.fillStyle = online ? '#c0f3d6' : '#b8bbc4';
+  ctx.fillStyle = online ? '#ffcd73' : '#bcab8b';
   ctx.beginPath();
   ctx.arc(58, 48, 5, 0, Math.PI * 2);
   ctx.fill();
@@ -44,10 +44,10 @@ function draw() {
   text(clock.format(new Date(now)), 1131, 54, 19, '#e2e6ec');
   text('UltraSquad', 51, 143, 65, '#f4f5f1');
   text('Обработка локальных событий', 55, 181, 24, '#c9cdd5');
-  ctx.fillStyle = '#343740';
+  ctx.fillStyle = '#594528';
   ctx.fillRect(51, 211, 1178, 1);
   if (!reduce.matches && latestAt && now - latestAt < 900) {
-    ctx.fillStyle = '#c0f3d6';
+    ctx.fillStyle = '#ffcd73';
     ctx.fillRect(51, 211, 1178 * (1 - (now - latestAt) / 900), 2);
   }
   const update = events.filter(item => item.kind !== 'operation');
@@ -60,10 +60,10 @@ function draw() {
     for (const [index, item] of shown.entries()) {
       const y = 233 + index * 66;
       const emph = item.kind === 'alert';
-      ctx.fillStyle = emph ? '#29261f' : index % 2 ? '#15181e' : '#191c22';
+      ctx.fillStyle = emph ? '#40301a' : index % 2 ? '#20190e' : '#2b2214';
       ctx.fillRect(51, y, 1178, 60);
       text(clock.format(new Date(item.time)), 67, y + 24, 15, '#b9bec9');
-      text(labels[item.kind] || 'СИСТЕМА', 67, y + 47, 14, emph ? '#ffdb9c' : '#b9d8ce');
+      text(labels[item.kind] || 'СИСТЕМА', 67, y + 47, 14, emph ? '#ffdb9c' : '#d9c4a0');
       text(item.agent || 'UltraSquad', 188, y + 36, 21, '#f2f4f2', 252);
       text(item.text, 456, y + 36, 20, '#dde2e9', 746);
     }
@@ -88,6 +88,7 @@ function stop() {
   stream = null;
   video.srcObject = null;
   byId('start').disabled = false;
+  byId('screen-share').disabled = false;
   byId('stop').disabled = true;
   byId('invite').disabled = true;
   status.textContent = 'Эфир остановлен';
@@ -120,12 +121,40 @@ byId('start').addEventListener('click', () => {
       latestAt = Date.now();
     };
     byId('start').disabled = true;
+    byId('screen-share').disabled = true;
     byId('stop').disabled = false;
     byId('invite').disabled = false;
     status.textContent = 'В эфире · Подключаем источник';
   } catch {
     stop();
     status.textContent = 'Этот браузер не может захватывать видео панели.';
+  }
+});
+byId('screen-share').addEventListener('click', async () => {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    status.textContent = 'Захват окна недоступен в этом браузере.';
+    return;
+  }
+  byId('screen-share').disabled = true;
+  byId('start').disabled = true;
+  try {
+    const picked = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const [track] = picked.getVideoTracks();
+    if (!track) {
+      picked.getTracks().forEach(item => item.stop());
+      stop();
+      return;
+    }
+    stream = picked;
+    track.addEventListener('ended', () => { if (stream === picked) stop(); }, { once: true });
+    video.srcObject = picked;
+    video.play().catch(() => {});
+    byId('stop').disabled = false;
+    byId('invite').disabled = false;
+    status.textContent = 'В эфире · Выбранная вкладка или окно';
+  } catch {
+    stop();
+    status.textContent = 'Захват не запущен. Выберите вкладку или окно, чтобы продолжить.';
   }
 });
 byId('stop').addEventListener('click', stop);
