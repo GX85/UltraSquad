@@ -23,8 +23,29 @@ function route() {
   closeMenu();
   if (v === 'models') renderModels();
   if (v === 'graph') requestAnimationFrame(graph.resize);
+  camConnect();
+  if (v === 'live') { const c = $('#chat'); c.scrollTop = c.scrollHeight; }
 }
 addEventListener('hashchange', route);
+
+// ---------- камера эфира ----------
+// Видеопоток подключён, только пока открыт «Эфир» и вкладка видна, — иначе скрытый браузер на сервере отдыхает.
+let camOk = false, stageMode = 'video';
+try { stageMode = localStorage.getItem('stage') || 'video'; } catch {}
+function camConnect() {
+  const img = $('#camImg'), want = camOk && stageMode === 'video' && location.hash === '#live' && !document.hidden;
+  if (want && !img.dataset.on) { img.dataset.on = '1'; img.src = '/api/cam.mjpg?t=' + Date.now(); }
+  if (!want && img.dataset.on) { delete img.dataset.on; img.src = 'data:,'; img.removeAttribute('src'); }
+}
+function setStage(mode) {
+  stageMode = camOk ? mode : 'text'; try { localStorage.setItem('stage', mode); } catch {}
+  $('#stage').classList.toggle('text', stageMode === 'text');
+  $$('#stageSeg button').forEach(b => b.classList.toggle('on', b.dataset.stage === stageMode));
+  $('#stageSeg').style.display = camOk ? '' : 'none';
+  camConnect();
+}
+$('#stageSeg').onclick = e => { const b = e.target.closest('[data-stage]'); if (b) setStage(b.dataset.stage); };
+document.addEventListener('visibilitychange', camConnect);
 
 // ---------- мобильное меню ----------
 const menu = $('#mobileMenu'), toggle = $('#menuToggle');
@@ -46,8 +67,14 @@ function renderStrip() {
   $('#sAgents').textContent = `${S.agents.length}/${S.max}`;
   $('#sActive').textContent = busy;
   $('#sPages').textContent = pages;
-  $('#sLlm').textContent = `${q.used ?? 0}/${q.cap ?? 0}`;
-  $('#sLlmSub').textContent = q.exhausted || q.used >= q.cap ? 'лимит исчерпан' : q.cooldown > 0 ? 'пауза api' : 'сегодня';
+  if (q.brain === 'claude') {
+    const c = q.claude || {};
+    $('#sLlm').textContent = `${c.used ?? 0}/${c.cap ?? 0}`;
+    $('#sLlmLbl').textContent = `Claude ${c.model || ''} · ` + (c.paused ? 'пауза' : c.used >= c.cap ? 'лимит часа' : 'за час');
+  } else {
+    $('#sLlm').textContent = `${q.used ?? 0}/${q.cap ?? 0}`;
+    $('#sLlmLbl').textContent = 'Бесплатные модели · ' + (q.exhausted || q.used >= q.cap ? 'лимит исчерпан' : q.cooldown > 0 ? 'пауза api' : 'сегодня');
+  }
   const run = S.settings.running;
   $('#sStatus').classList.toggle('paused', !run); $('#sStatus em').textContent = run ? 'Эфир' : 'Пауза';
   $('#runBtn').textContent = run ? 'Пауза' : 'Запуск';
@@ -73,8 +100,9 @@ function show(e) {
   if (e.type === 'note') { if (current && current.agent === e.agent) { $('#scrNote').textContent = 'Заметка — ' + e.text; $('#scrThought').textContent = e.thought ? '› ' + e.thought : ''; } return; }
   current = e; lastShow = Date.now();
   $('#scrName').textContent = e.name;
-  $('#scrMode').textContent = e.model ? 'модель · ' + e.model.replace(':free', '') : 'автопилот';
+  $('#scrMode').textContent = e.mode === 'backup' ? 'идёт на подмогу' : e.model ? 'модель · ' + e.model.replace(':free', '') : 'автопилот';
   $('#scrThought').textContent = e.thought ? '› ' + e.thought : '';
+  $('#lowerTitle').textContent = e.type === 'page' ? e.title : e.type === 'search' ? 'Поиск: ' + e.query : 'Вердикт ' + e.name;
   $('#scrNote').textContent = ''; $('#scrView').scrollTop = 0;
   if (e.type === 'page') {
     let u = e.url; try { u = decodeURI(e.url); } catch {}
@@ -93,13 +121,32 @@ function renderTiles() {
   const list = [...lastBy.values()].filter(e => !current || e.agent !== current.agent).sort((a, b) => b.ts - a.ts).slice(0, 4);
   $('#tiles').innerHTML = list.map(e => `<button class="tile" type="button" data-follow="${esc(e.agent)}"><small><span>${esc(e.name)}</span><span>${esc(e.type === 'page' ? e.host : 'поиск')}</span></small><b>${esc(e.type === 'page' ? e.title : e.query)}</b><p>${esc(e.type === 'page' ? e.text.slice(0, 90) : (e.results || []).map(r => r.title).join(' · ').slice(0, 90))}</p></button>`).join('');
 }
-function setFollow(id) {
-  follow = id; const a = id && agent(id);
-  $('#followBtn').textContent = a ? `Закреплён: ${a.name} ✕` : 'Авто-режиссёр';
-  if (id && lastBy.has(id)) show(lastBy.get(id));
+// Режиссёр живёт на сервере: он решает, кто в кадре, и ведёт камеру. Здесь — только закрепление агента.
+function followLabel() { const a = follow && agent(follow); $('#followBtn').textContent = a ? `Закреплён: ${a.name} ✕` : 'Авто-режиссёр'; }
+function setFollow(id) { follow = id; followLabel(); api('/cam', { method: 'POST', body: { pin: id } }); }
+
+// ---------- чат отряда ----------
+const TAG = { problem: 'SOS · нужна подмога', alert: 'Тревога', ack: 'Иду на подмогу' };
+const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+function chatLine(m) {
+  const box = $('#chat'), stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const d = document.createElement('div'); d.className = `cm ${m.kind}`;
+  const meta = m.kind === 'user' ? time(m.ts) : `<b>${esc(m.name)}</b>${esc(m.role || '')} · ${time(m.ts)}${m.model ? ' · ' + esc(m.model.replace(':free', '')) : ''}`;
+  let link = ''; if (m.url) { try { const u = new URL(m.url); if (/^https?:$/.test(u.protocol)) link = `<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${esc(short(m.url))}</a>`; } catch {} }
+  d.innerHTML = (m.kind === 'user' ? '' : `<span class="cm__av" style="--h:${hue(m.role || m.name)}">${esc(m.name[0] || '?')}</span>`) +
+    `<div class="cm__b"><p class="cm__meta">${meta}</p><div class="cm__t">${TAG[m.kind] ? `<span class="cm__tag">${TAG[m.kind]}</span>` : ''}${esc(m.text)}${link}</div></div>`;
+  if (m.agent !== 'user') { d.dataset.follow = m.agent; d.style.cursor = 'pointer'; }
+  box.append(d); while (box.children.length > 200) box.firstChild.remove();
+  if (stick) box.scrollTop = box.scrollHeight;
+  $('#chatCount').textContent = box.children.length;
 }
+$('#chatForm').onsubmit = async e => {
+  e.preventDefault(); const t = $('#chatIn').value.trim(); if (!t) return; $('#chatIn').value = '';
+  const r = await api('/chat', { method: 'POST', body: { text: t } }); if (r.error) toast(r.error, true);
+  const box = $('#chat'); box.scrollTop = box.scrollHeight;
+};
 $('#followBtn').onclick = () => setFollow(null);
-document.addEventListener('click', e => { const t = e.target.closest('[data-follow]'); if (t) { setFollow(t.dataset.follow); if (location.hash !== '#live') location.hash = '#live'; } });
+document.addEventListener('click', e => { if (e.target.closest('a[href^="http"]')) return; const t = e.target.closest('[data-follow]'); if (t && agent(t.dataset.follow)) { setFollow(t.dataset.follow); if (location.hash !== '#live') location.hash = '#live'; } });
 
 const VERB = { page: 'open', search: 'search', note: 'note', error: 'err', patrol: 'patrol' };
 function feedLine(e) {
@@ -114,8 +161,8 @@ function onLive(e, replay) {
   if (e.type === 'page' || e.type === 'search') lastBy.set(e.agent, e);
   if (e.type === 'page') { const a = agent(e.agent); if (a && !replay) { a.steps = (a.steps || 0) + 1; const c = $(`.row--agent[data-id="${e.agent}"] [data-steps]`); if (c) c.textContent = a.steps; } }
   feedLine(e); graph.onLive(e, replay);
-  if (replay || !SHOWABLE.includes(e.type)) return;
-  if (follow ? e.agent === follow : (!current || e.agent === current.agent || e.type === 'patrol' || Date.now() - lastShow > 7000)) show(e); else renderTiles();
+  if (replay) return;
+  if (e.type === 'note') show(e); else renderTiles(); // что в кадре — решает серверный режиссёр (событие cam)
 }
 
 // ---------- агенты ----------
@@ -155,7 +202,7 @@ async function openEdit(a) {
   const d = a || { name: '', role: 'Свободная миссия', mission: '', prompt: '', model: 'auto', permissions: ['web.browse'] };
   $('#eTitle').textContent = a ? 'Настройка · ' + a.name : 'Новый агент'; $('#eDel').style.visibility = a ? 'visible' : 'hidden';
   $('#eName').value = d.name; $('#eRole').value = d.role; $('#eMission').value = d.mission; $('#ePrompt').value = d.prompt || '';
-  $('#eModel').innerHTML = `<option value="auto">Авто — ротация бесплатных моделей</option>` + models.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+  $('#eModel').innerHTML = `<option value="auto">Авто — мозг по умолчанию (Claude или бесплатные)</option>` + models.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
   $('#eModel').value = d.model; if (!$('#eModel').value) $('#eModel').value = 'auto';
   $('#ePerms').innerHTML = Object.entries(S.perms).map(([k, t]) => `<button type="button" class="perm ${d.permissions.includes(k) ? 'on' : ''}" data-p="${k}" aria-pressed="${d.permissions.includes(k)}">${esc(t)}<code>${k}</code></button>`).join('');
   openModal($('#editModal')); $('#eName').focus();
@@ -207,17 +254,34 @@ async function renderModels() {
   await ensureModels(); const q = $('#mSearch').value.trim().toLowerCase(), k = S.quota || {};
   const list = models.filter(m => (m.id + m.name).toLowerCase().includes(q));
   $('#mCount').textContent = models.length;
-  $('#quotaNote').textContent = `Подключены только бесплатные модели (:free) — платные заблокированы на уровне сервера. Сегодня использовано ${k.used ?? 0} из ${k.cap ?? 0} запросов, не более ${k.rpm ?? 16} в минуту. ` +
-    (k.freeTier ? 'У аккаунта базовый лимит OpenRouter: 50 бесплатных запросов в сутки. Когда лимит кончается, агенты продолжают ходить по сети на автопилоте без модели.' : 'У аккаунта расширенный лимит бесплатных запросов.');
+  const c = k.claude || {}, isCl = k.brain === 'claude';
+  $$('#brainBox [data-brain]').forEach(b => b.classList.toggle('on', b.dataset.brain === k.brain));
+  $('#brainState').textContent = isCl ? `Claude ${c.model} · ${c.used}/${c.cap} за час` : c.available ? 'бесплатные модели' : 'Claude не найден на этом компьютере';
+  if (document.activeElement !== $('#clCap')) $('#clCap').value = c.cap ?? 600;
+  $('#clModel').value = c.model || 'haiku';
+  $('#quotaNote').textContent = (isCl
+    ? `Агенты думают через Claude (твой вход в Claude Code на этом компьютере) — запросы расходуют лимиты твоего плана Claude, поэтому стоит потолок ${c.cap} запросов в час. Claude вызывается без инструментов: страница из интернета не может ничего запустить на ноутбуке. Если Claude недоступен, сервер сам переходит на бесплатные модели. `
+    : `Агенты думают через бесплатные модели OpenRouter (:free). `) +
+    `Платные модели OpenRouter заблокированы на уровне сервера; бесплатных запросов сегодня ${k.used ?? 0} из ${k.cap ?? 0}. Когда лимиты кончаются, агенты продолжают ходить по сети на автопилоте.` +
+    (c.error ? ` Последняя ошибка Claude: ${c.error}` : '');
   $('#modelRows').innerHTML = list.map(m => `<div class="row row--model"><span class="cut">${esc(m.name)}</span><span class="mono dim cut">${esc(m.id)}</span><span class="mono dim">${m.ctx ? Math.round(m.ctx / 1000) + 'k ctx' : ''}</span></div>`).join('') || '<p class="empty">Модели не загружены — проверь ключ OpenRouter в .env.</p>';
 }
 $('#mSearch').oninput = renderModels;
+const saveBrain = async body => { const r = await api('/settings', { method: 'POST', body }); if (r.error) return toast(r.error, true); S.settings = r; S.quota = (await api('/state')).quota; renderStrip(); renderModels(); };
+$('#brainBox').onclick = e => { const b = e.target.closest('[data-brain]'); if (b) saveBrain({ brain: b.dataset.brain }); };
+$('#clModel').onchange = e => saveBrain({ claudeModel: e.target.value });
+$('#clCap').onchange = e => saveBrain({ claudePerHour: +e.target.value });
 
 // ---------- граф ----------
 const graph = (() => {
   const c = $('#graph'), x = c.getContext('2d'), tip = $('#gtip');
   const N = new Map(), E = new Map(); let W = 0, H = 0, mouse = null, hover = null;
-  function resize() { const r = c.parentElement.getBoundingClientRect(); if (!r.width) return; const d = devicePixelRatio || 1; W = r.width; H = r.height; c.width = W * d; c.height = H * d; x.setTransform(d, 0, 0, d, 0, 0); }
+  function resize() {
+    const r = c.parentElement.getBoundingClientRect(); if (!r.width) return;
+    const d = devicePixelRatio || 1, dx = r.width / 2 - (W || 900) / 2, dy = r.height / 2 - (H || 600) / 2;
+    for (const n of N.values()) { n.x += dx; n.y += dy; } // узлы остаются вокруг центра при первом показе и при изменении окна
+    W = r.width; H = r.height; c.width = W * d; c.height = H * d; x.setTransform(d, 0, 0, d, 0, 0);
+  }
   function node(id, type, label) {
     let n = N.get(id);
     if (!n) { const a = Math.random() * 6.283, d = type === 'hub' ? 0 : 120 + Math.random() * 180; n = { id, type, x: (W || 900) / 2 + Math.cos(a) * d, y: (H || 600) / 2 + Math.sin(a) * d, vx: 0, vy: 0, pulse: 0, hits: 0 }; N.set(id, n); }
@@ -260,21 +324,26 @@ const graph = (() => {
     const now = Date.now(); x.clearRect(0, 0, W, H); x.lineWidth = 1;
     for (const e of E.values()) {
       const a = N.get(e.a), b = N.get(e.b); if (!a || !b) continue; const fresh = e.kind === 'visit' && now - e.ts < 6000;
-      x.strokeStyle = `rgba(255,255,255,${fresh ? .55 : e.kind === 'visit' ? .2 : .07})`; x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke();
-      if (fresh) { const t = ((now - e.ts) % 1100) / 1100; x.fillStyle = '#fff'; x.fillRect(a.x + (b.x - a.x) * t - 1.5, a.y + (b.y - a.y) * t - 1.5, 3, 3); }
+      x.strokeStyle = fresh ? 'rgba(10,132,255,.85)' : `rgba(255,255,255,${e.kind === 'visit' ? .18 : .06})`; x.lineWidth = fresh ? 1.5 : 1; x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke();
+      if (fresh) { const t = ((now - e.ts) % 1100) / 1100; x.fillStyle = '#fff'; x.shadowColor = '#0a84ff'; x.shadowBlur = 10; x.beginPath(); x.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 2.2, 0, 6.283); x.fill(); x.shadowBlur = 0; }
     }
-    const few = S.agents.length <= 36; x.font = '10px "JetBrains Mono",monospace'; x.textBaseline = 'middle';
+    x.lineWidth = 1;
+    const few = S.agents.length <= 36; x.font = '500 11px Inter,"Segoe UI",sans-serif'; x.textBaseline = 'middle';
     for (const n of N.values()) {
       const h = n === hover;
-      if (n.type === 'hub') { x.strokeStyle = '#fff'; x.strokeRect(n.x - 9, n.y - 9, 18, 18); x.fillStyle = '#fff'; x.fillRect(n.x - 3, n.y - 3, 6, 6); continue; }
+      if (n.type === 'hub') {
+        x.shadowColor = 'rgba(255,255,255,.8)'; x.shadowBlur = 24; x.fillStyle = '#fff'; x.beginPath(); x.arc(n.x, n.y, 7, 0, 6.283); x.fill(); x.shadowBlur = 0;
+        x.strokeStyle = 'rgba(255,255,255,.3)'; x.beginPath(); x.arc(n.x, n.y, 14, 0, 6.283); x.stroke(); continue;
+      }
       if (n.type === 'agent') {
-        const a = agent(n.id), busy = a && a.enabled && a.state !== 'idle', s = h ? 6 : 4;
-        x.fillStyle = !a || !a.enabled ? 'rgba(255,255,255,.14)' : busy ? '#fff' : 'rgba(255,255,255,.42)'; x.fillRect(n.x - s, n.y - s, s * 2, s * 2);
-        if (n.pulse > 0) { const r = s + (1 - n.pulse) * 18; x.strokeStyle = `rgba(255,255,255,${n.pulse * .7})`; x.strokeRect(n.x - r, n.y - r, r * 2, r * 2); }
-        if (few || h || busy) { x.fillStyle = `rgba(255,255,255,${h || busy ? .9 : .45})`; x.fillText(n.label, n.x + 10, n.y); }
+        const a = agent(n.id), busy = a && a.enabled && a.state !== 'idle', s = h ? 7 : 5;
+        if (busy) { x.shadowColor = '#0a84ff'; x.shadowBlur = 16; }
+        x.fillStyle = !a || !a.enabled ? 'rgba(255,255,255,.14)' : busy ? '#0a84ff' : 'rgba(255,255,255,.5)'; x.beginPath(); x.arc(n.x, n.y, s, 0, 6.283); x.fill(); x.shadowBlur = 0;
+        if (n.pulse > 0) { x.strokeStyle = `rgba(10,132,255,${n.pulse * .8})`; x.beginPath(); x.arc(n.x, n.y, s + (1 - n.pulse) * 20, 0, 6.283); x.stroke(); }
+        if (few || h || busy) { x.fillStyle = `rgba(245,245,247,${h || busy ? .95 : .5})`; x.fillText(n.label, n.x + 11, n.y); }
       } else {
-        const r = 2.5 + Math.min(n.hits, 8) * .5; x.strokeStyle = `rgba(255,255,255,${.35 + n.pulse * .6})`; x.beginPath(); x.arc(n.x, n.y, r, 0, 6.283); x.stroke();
-        if (h || n.pulse > .25) { x.fillStyle = `rgba(255,255,255,${h ? .9 : n.pulse})`; x.fillText(n.label, n.x + r + 6, n.y); }
+        const r = 3 + Math.min(n.hits, 8) * .5; x.strokeStyle = `rgba(255,255,255,${.4 + n.pulse * .6})`; x.lineWidth = 1.5; x.beginPath(); x.arc(n.x, n.y, r, 0, 6.283); x.stroke(); x.lineWidth = 1;
+        if (h || n.pulse > .25) { x.fillStyle = `rgba(245,245,247,${h ? .95 : n.pulse})`; x.fillText(n.label, n.x + r + 7, n.y); }
       }
     }
   }
@@ -300,6 +369,8 @@ const graph = (() => {
 function connect() {
   const es = new EventSource('/api/events');
   es.addEventListener('live', e => { onLive(JSON.parse(e.data)); renderStrip(); });
+  es.addEventListener('cam', e => { const d = JSON.parse(e.data); follow = d.pin; followLabel(); if (d.entry) show(d.entry); });
+  es.addEventListener('chat', e => chatLine(JSON.parse(e.data)));
   es.addEventListener('astate', e => {
     const d = JSON.parse(e.data), a = agent(d.id); if (!a) return; a.state = d.state; a.target = d.target;
     const c = $(`.row--agent[data-id="${d.id}"] [data-st]`); if (c && a.enabled) { c.textContent = ST[d.state] || d.state; c.classList.toggle('busy', d.state !== 'idle'); }
@@ -319,7 +390,9 @@ function connect() {
   const liveLog = s.live; S = { ...s, live: [] };
   $('#spawnT').innerHTML = '<option value="">Смешанный состав</option>' + S.templates.map(t => `<option value="${esc(t.key)}">${esc(t.role)}</option>`).join('');
   graph.sync(); liveLog.forEach(e => onLive(e, true));
-  const last = [...liveLog].reverse().find(e => e.type === 'page' || e.type === 'search'); if (last) show(last);
+  (s.chat || []).forEach(chatLine); $('#chat').scrollTop = $('#chat').scrollHeight;
+  camOk = !!s.cam?.available; follow = s.cam?.pin || null; followLabel(); setStage(stageMode);
+  const last = s.cam?.entry || [...liveLog].reverse().find(e => e.type === 'page' || e.type === 'search'); if (last) show(last);
   renderStrip(); renderAgents(); renderSecurity(); renderTiles(); connect();
   if (location.hash === '#models') renderModels();
   if (!s.keyOk) toast('Ключ OpenRouter не найден в .env — агенты работают на автопилоте', true);
