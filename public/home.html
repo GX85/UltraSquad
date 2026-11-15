@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>UltraSquad — Центр наблюдения</title>
+  <link rel="preconnect" href="https://d8j0ntlcm91z4.cloudfront.net">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400&family=JetBrains+Mono:wght@300;400;500&display=swap">
+  <link rel="stylesheet" href="/home.css">
+  <script src="/home.js" defer></script>
+</head>
+<body>
+  <main class="hero" id="main-content">
+    <div class="hero__media" aria-hidden="true">
+      <video id="film" autoplay muted loop playsinline preload="auto" poster="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260806_132328_5f9029c8-218f-4489-82b6-29ff2849920e.png" data-src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260806_133255_956f653f-5d80-4b06-abd5-0f46c98b60fa.mp4"></video>
+    </div>
+    <div class="hero__scrim" aria-hidden="true"></div>
+    <header class="nav">
+      <a class="wordmark" href="/" aria-label="UltraSquad, главная">ULTRASQUAD</a>
+      <nav class="links" aria-label="Основное меню">
+        <a href="/console#agents">Агенты</a>
+        <a href="/console#events">Журнал</a>
+        <a href="/console#models">Модели</a>
+        <a class="outline" href="/console#live">Прямой эфир</a>
+      </nav>
+      <button id="menu-toggle" class="hamburger" aria-controls="mobileMenu" aria-expanded="false" aria-label="Открыть меню"><span></span><span></span><span></span></button>
+    </header>
+    <div id="mobileMenu" class="mobile-menu" role="dialog" aria-modal="true" aria-label="Меню сайта" aria-hidden="true" inert>
+      <nav aria-label="Основное меню">
+        <a href="/console#agents">Агенты</a>
+        <a href="/console#events">Журнал</a>
+        <a href="/console#models">Модели</a>
+        <a class="outline" href="/console#live">Прямой эфир</a>
+      </nav>
+    </div>
+    <div class="hero__body">
+      <section class="entry" aria-labelledby="title">
+        <p id="landing-status" class="chip">[ Локальный центр ]</p>
+        <h1 id="title">UltraSquad</h1>
+        <p class="tagline">Мониторинг событий и работа агентов в реальном времени</p>
+        <div class="actions">
+          <a class="action solid" href="/console">Открыть консоль <span aria-hidden="true">↗</span></a>
+          <a class="action ghost" href="/console#live">Смотреть прямой эфир <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+    </div>
+    <footer><span>Локальный сервер · <span id="landing-host">127.0.0.1</span></span><a href="/console#agents">Управление агентами</a></footer>
+  </main>
+</body>
+</html>

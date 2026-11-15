@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#000">
+<title>UltraSquad — Консоль</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400&family=JetBrains+Mono:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/style.css">
+<script src="/signal.js" defer></script>
+<script src="/live.js" defer></script>
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="/">ULTRASQUAD</a>
+    <nav aria-label="Разделы консоли">
+      <a href="#overview" data-nav="overview">Обзор</a>
+      <a href="#agents" data-nav="agents">Агенты</a>
+      <a href="#live" data-nav="live">Прямой эфир <span class="stream-dot" aria-hidden="true"></span></a>
+      <a href="#events" data-nav="events">Журнал</a>
+      <a href="#models" data-nav="models">Модели</a>
+    </nav>
+    <div class="node"><span>Локальный сервер</span><code id="local-host">127.0.0.1</code><a href="/">На главную ↗</a></div>
+  </aside>
+  <main>
+    <header class="top"><span id="crumb">Обзор</span><time id="clock"></time></header>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <section id="overview" class="page">
+      <div class="headline"><div><p class="eyebrow" id="watch-state">Подключение к серверу</p><h1>Центр наблюдения</h1></div><button id="watch" disabled>Наблюдение</button></div>
+      <div class="metrics">
+        <article><span>События</span><strong id="stat-total">—</strong></article>
+        <article><span>Открытые сигналы</span><strong id="stat-open">—</strong></article>
+        <article><span>Активные агенты</span><strong id="stat-agents">—</strong></article>
+      </div>
+      <section class="chart-panel">
+        <div class="section-head"><h2>Активность журнала</h2><span id="last-poll" class="muted"></span></div>
+        <canvas id="signal-canvas" role="img" aria-label="События и сигналы за последние 18 минут"></canvas>
+        <div class="legend"><span>■ События</span><span>□ Сигналы</span></div>
+      </section>
+      <div class="section-head"><h2>Последние сигналы</h2><a href="#events">Весь журнал ↗</a></div>
+      <div id="recent" class="table-frame"></div>
+      <div class="ingress">
+        <div><h2>Источник событий</h2><code>telemetry/events.jsonl</code><p id="watch-count"></p></div>
+        <div class="actions"><button class="import">Импорт JSON</button><button id="demo" class="ghost">Демоданные</button></div>
+      </div>
+    </section>
+    <section id="agents" class="page" hidden>
+      <div class="headline"><div><p class="eyebrow" id="agent-capacity"></p><h1>Агенты</h1></div></div>
+      <form id="add-form" class="add-form">
+        <label>Имя <input name="name" maxlength="32" value="Наблюдатель" required></label>
+        <label>Категория <select name="type" id="add-type"></select></label>
+        <label class="count-field">Количество <input name="count" type="number" min="1" max="100" value="1" required></label>
+        <button type="submit">Добавить ↗</button>
+      </form>
+      <div class="agent-workspace">
+        <div class="agent-directory">
+          <label class="visually-hidden" for="agent-search">Поиск агента</label>
+          <input id="agent-search" type="search" placeholder="Найти агента">
+          <div id="agent-list" role="group" aria-label="Выбор агента"></div>
+        </div>
+        <div id="agent-editor"></div>
+      </div>
+      <section class="brief-panel"><div class="section-head"><h2>Сводка модели</h2></div><p class="muted">В OpenRouter передаются категория и три счётчика выбранного агента.</p><div id="brief"></div></section>
+    </section>
+    <section id="live" class="page" hidden>
+      <div class="headline"><div><p class="eyebrow" id="stream-state">Соединение с сервером</p><h1>Прямой эфир</h1></div><button id="feed-pause" type="button">Пауза ленты</button></div>
+      <p class="intro">Действия сервера, обработка журнала и запросы моделей появляются по мере выполнения.</p>
+      <div class="live-grid">
+        <section class="live-chart"><div class="section-head"><h2>Обработка агентами</h2></div><p class="muted">События за всё время работы агента</p><div id="agent-chart"></div></section>
+        <section class="feed-panel"><div class="section-head"><h2>Лента действий</h2><span class="muted" id="queue-state"></span></div><div id="activity-feed" role="log" aria-live="polite" aria-relevant="additions"><p class="empty" id="feed-empty">Ожидание действий сервера</p></div></section>
+      </div>
+    </section>
+    <section id="events" class="page" hidden>
+      <div class="headline"><h1>Журнал</h1><button class="import">Импорт JSON</button></div>
+      <div class="filters">
+        <input id="search" type="search" placeholder="Источник, событие или агент" aria-label="Поиск по журналу">
+        <select id="filter" aria-label="Статус события"><option value="">Все статусы</option><option value="new">Открытые сигналы</option><option value="reviewed">Проверено</option><option value="logged">Без сигнала</option></select>
+      </div>
+      <div id="event-table" class="table-frame"></div>
+    </section>
+    <section id="models" class="page" hidden>
+      <div class="headline"><h1>Модели</h1><button id="models-refresh">Обновить каталог ↻</button></div>
+      <p class="intro">Бесплатные текстовые модели OpenRouter. Провайдеры устанавливают лимиты запросов.</p>
+      <div class="model-layout">
+        <section class="model-connection">
+          <h2>Подключение</h2><p id="model-state"></p>
+          <form id="key-form"><label for="key">API-ключ</label><input id="key" type="password" autocomplete="off" spellcheck="false" required><div class="actions"><button>Подключить</button><button type="button" class="ghost" id="disconnect">Отключить</button></div></form>
+          <p class="muted">Ключ хранится в памяти сервера до остановки.</p>
+        </section>
+        <section><h2>Бесплатный каталог</h2><p class="muted">Выберите модель в настройках агента.</p><ul id="model-list"></ul></section>
+      </div>
+    </section>
+    <input type="file" id="file" accept=".json,application/json" hidden>
+  </main>
+</div>
+</body>
+</html>
