@@ -97,7 +97,6 @@ body.mode-app .hero__body,body.mode-app .legal{display:none}
 
 /* ---------- консоль ---------- */
 .console{display:none;min-height:0;flex-direction:column;gap:14px;padding:4px var(--gutter) clamp(14px,1.6vw,24px)}
-body.mode-app .hero{height:auto;overflow:visible}
 body.mode-app .console{display:flex;animation:rise .7s var(--ease)}
 @keyframes rise{from{opacity:0;transform:translateY(12px)}}
 @keyframes pop{from{opacity:0;transform:translateY(10px) scale(.94)}}
@@ -169,20 +168,6 @@ body.mode-app .console{display:flex;animation:rise .7s var(--ease)}
 .tile p{font-size:11.5px;color:var(--text-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:none;margin-top:auto}
 
 /* чат отряда */
-.chat {
-  display: grid;
-  grid-template-rows: auto minmax(130px, 1fr) auto;
-  min-height: min-content;
-  max-height: min(68svh, 650px);
-}
-.goals { flex: none; padding: 12px 14px; }
-.chat .chat__body {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  contain: size;
-}
-.chat__body > .cm { flex: none; }
 .chat__body,.msgs{flex:1;overflow-y:auto;padding:12px 12px 6px;display:flex;flex-direction:column;gap:10px}
 .cm{display:flex;gap:9px;align-items:flex-end;animation:pop .5s var(--spring)}
 .cm__av{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:11.5px;font-weight:700;color:#fff;background:linear-gradient(145deg,hsl(var(--h) 80% 62%),hsl(calc(var(--h) + 40) 75% 46%));box-shadow:0 4px 12px -4px hsl(var(--h) 80% 50% / .7),inset 0 1px 0 rgba(255,255,255,.35)}
@@ -258,29 +243,6 @@ select.field option{background:#1c1c1e;color:#fff}
 .note{padding:14px 18px;border-bottom:1px solid var(--stroke);font-size:13px;line-height:1.6;color:var(--text-2)}
 .brain{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--stroke)}
 .brain__opt{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--text-2)}
-.brain__opt{display:none}.brain__opt.show{display:flex}
-
-/* щит безопасности */
-.shield{padding:18px}
-.shield__top{display:flex;align-items:center;gap:20px}
-.gauge{position:relative;width:104px;height:104px;flex:none}
-.gauge svg{transform:rotate(-90deg);width:100%;height:100%}
-.gauge circle{fill:none;stroke-width:9}
-.gauge__bg{stroke:rgba(255,255,255,.08)}
-.gauge__fg{stroke:var(--green);stroke-linecap:round;stroke-dasharray:327;stroke-dashoffset:327;transition:stroke-dashoffset .9s var(--ease),stroke .5s ease}
-.gauge__num{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
-.gauge__num b{font-size:28px;font-weight:700;letter-spacing:-.04em;line-height:1}
-.gauge__num span{font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em}
-.shield__meta{min-width:0}
-.shield__state{font-size:19px;font-weight:600;letter-spacing:-.02em}
-.shield__sub{font-size:12.5px;color:var(--text-2);margin-top:3px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.chips span{font-size:11px;font-weight:500;padding:3px 9px;border-radius:999px;background:var(--fill);color:var(--text-2)}
-.lockrow{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:16px;padding:13px 15px;border-radius:14px;background:var(--fill);transition:background .4s ease,box-shadow .4s ease}
-.lockrow b{font-size:14px;font-weight:600;display:block}.lockrow span{font-size:12px}
-.shield.locked{box-shadow:inset 0 0 0 1px rgba(255,69,58,.5),0 0 40px -10px rgba(255,69,58,.5)}
-.shield.locked .lockrow{background:rgba(255,69,58,.16)}
-.shield.locked .gauge__fg{stroke:var(--red)}
 .sec{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:14px}
 .sec__col{display:flex;flex-direction:column;gap:14px;min-height:0}
 .verdict{font-size:14px;line-height:1.65;color:var(--text-2);white-space:pre-wrap}
@@ -328,44 +290,3 @@ select.field option{background:#1c1c1e;color:#fff}
   .hero__media{background-image:url("https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260806_132328_5f9029c8-218f-4489-82b6-29ff2849920e.png")}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
-
-.hosted-notice {
-  position: relative;
-  z-index: 61;
-  padding: 12px var(--gutter);
-  background: #211b12;
-  color: #f7e3be;
-  text-align: center;
-}
-.hosted-notice a { color: inherit; text-decoration: underline; }
-
-.hosted-preview.mode-app .hosted-banner,
-.hosted-preview .goals,
-.hosted-preview #chat,
-.chat__form[hidden],
-.hosted-chat[hidden] { display: none; }
-.hosted-preview .live__side .chat {
-  grid-template-rows: auto auto;
-  height: auto;
-  flex: none;
-}
-.hosted-chat p { margin: 0 0 12px; }
-
-#goalStatus { margin: 0 0 8px; overflow-wrap: anywhere; }
-@media (max-width: 720px) {
-  .live__side { grid-row: 1; }
-  .live__side .chat { height: min(76svh, 540px); }
-  .chat__form .field { min-width: 0; font-size: 16px; }
-  #goalActions .tools { gap: 6px; }
-  #goalActions button, .chat__form .send { min-height: 44px; }
-  .window { min-height: 43svh; }
-}
-
-@media (min-width: 901px) {
-  .live__side .chat {
-    flex: none;
-    height: clamp(350px, 54svh, 500px);
-  }
-}
-
-#account [hidden] { display: none; }

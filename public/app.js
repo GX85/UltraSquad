@@ -67,14 +67,10 @@ function renderStrip() {
   $('#sAgents').textContent = `${S.agents.length}/${S.max}`;
   $('#sActive').textContent = busy;
   $('#sPages').textContent = pages;
-  if (q.brainSetting === 'claude' && q.claude) {
-    const c = q.claude;
+  if (q.brain === 'claude') {
+    const c = q.claude || {};
     $('#sLlm').textContent = `${c.used ?? 0}/${c.cap ?? 0}`;
     $('#sLlmLbl').textContent = `Claude ${c.model || ''} · ` + (c.paused ? 'пауза' : c.used >= c.cap ? 'лимит часа' : 'за час');
-  } else if (q.brainSetting === 'ollama' && q.ollama) {
-    const o = q.ollama;
-    $('#sLlm').textContent = o.up ? `${o.used ?? 0}/ч` : '—';
-    $('#sLlmLbl').textContent = 'Ollama · ' + (o.up ? o.model : 'недоступна');
   } else {
     $('#sLlm').textContent = `${q.used ?? 0}/${q.cap ?? 0}`;
     $('#sLlmLbl').textContent = 'Бесплатные модели · ' + (q.exhausted || q.used >= q.cap ? 'лимит исчерпан' : q.cooldown > 0 ? 'пауза api' : 'сегодня');
@@ -144,19 +140,6 @@ function chatLine(m) {
   if (stick) box.scrollTop = box.scrollHeight;
   $('#chatCount').textContent = box.children.length;
 }
-function renderGoal() {
-  const g = S.goal;
-  const label = { running: 'В работе', done: 'Готово', cancelled: 'Отменено' };
-  $('#goalStatus').textContent = g
-    ? label[g.status] + ' · ' + g.title + ' · ' + g.done + '/' + g.total + (g.summary ? ' · ' + g.summary : '')
-    : 'Выбери цель для всего отряда.';
-}
-$('#goalActions').onclick = async e => {
-  const button = e.target.closest('[data-command]');
-  if (!button) return;
-  const result = await api('/chat', { method: 'POST', body: { text: button.dataset.command } });
-  if (result.error) toast(result.error, true);
-};
 $('#chatForm').onsubmit = async e => {
   e.preventDefault(); const t = $('#chatIn').value.trim(); if (!t) return; $('#chatIn').value = '';
   const r = await api('/chat', { method: 'POST', body: { text: t } }); if (r.error) toast(r.error, true);
@@ -249,53 +232,15 @@ $('#cForm').onsubmit = async e => {
 };
 
 // ---------- охота ----------
-const KIND_RU = { honeypot: 'ловушки', attack: 'атаки', flood: 'флуд', ban: 'баны' };
-function renderShield() {
-  const sec = S.sec || {}, lk = S.lock || {}, score = sec.score ?? 100;
-  const sh = $('#shield'); sh.classList.toggle('locked', !!lk.on);
-  $('#gaugeFg').style.strokeDashoffset = 327 - 327 * score / 100;
-  $('#gaugeFg').style.stroke = lk.on || score < 40 ? 'var(--red)' : score < 75 ? 'var(--orange)' : 'var(--green)';
-  $('#scoreNum').textContent = score;
-  $('#shieldState').textContent = lk.on ? 'Карантин · отражаем атаку' : score >= 75 ? 'Под контролем' : score >= 40 ? 'Повышенная активность' : 'Активная атака';
-  $('#shieldSub').textContent = `Угроз за час: ${sec.lastHour ?? 0} · в бане: ${sec.banned ?? 0}` + (sec.recentAttacks ? ` · ${sec.recentAttacks} за минуту` : '');
-  $('#kindChips').innerHTML = Object.entries(sec.byKind || {}).map(([k, n]) => `<span>${esc(KIND_RU[k] || k)}: ${n}</span>`).join('');
-  $('#lockTitle').textContent = lk.on ? (lk.manual ? 'Карантин включён вручную' : 'Карантин активен') : 'Карантин выключен';
-  $('#lockSub').textContent = lk.on ? (lk.manual ? 'Внешний доступ закрыт, пока не выключишь' : `Снимется автоматически через ${Math.ceil((lk.remaining || 0) / 1000)} с после затишья`) : 'Включится сам при массовой атаке';
-  $('#lockBtn').textContent = lk.on ? 'Снять карантин' : 'Включить карантин';
-  $('#lockBtn').className = 'btn btn--sm ' + (lk.on ? 'btn--danger' : 'btn--ghost');
-}
-function renderDefender() {
-  const d = S.defender || {};
-  $('#scanBtn').disabled = !d.available || d.scan === 'running';
-  const scanState = { running: 'Запускаем быструю проверку…', submitted: 'Defender принял запрос на быструю проверку.', error: d.scanError };
-  const summary = d.checkedAt ? [
-    d.realtime ? 'Защита в реальном времени включена.' : 'Защита в реальном времени выключена.',
-    'Активных угроз: ' + d.activeThreats + '. Известных Defender: ' + d.knownThreats + '.',
-    'Обновлено в ' + time(d.checkedAt) + '.'
-  ].join(' ') : 'Читаем статус Windows…';
-  $('#defenderStatus').textContent = [d.error || summary, scanState[d.scan]].filter(Boolean).join(String.fromCharCode(10));
-}
-
-$('#scanBtn').onclick = async () => {
-  $('#scanBtn').disabled = true;
-  const status = await api('/defender/scan', { method: 'POST' });
-  if (status.error) toast(status.error, true);
-  else S.defender = status;
-  renderDefender();
-};
-
 function renderSecurity() {
-  renderDefender();
   const ev = [...S.events].reverse();
   $('#evCount').textContent = ev.length;
   $('#evRows').innerHTML = ev.map(e => `<div class="row row--ev ${esc(e.severity)}"><span class="mono dim">${time(e.ts)}</span><span class="mono">${esc(e.kind)}</span><span class="mono h-sm">${esc(e.ip)}</span><span class="cut dim">${esc(e.detail)}</span></div>`).join('') || '<p class="empty">Тихо. Ловушки взведены.</p>';
   const b = Object.entries(S.bans);
   $('#banCount').textContent = b.length;
   $('#banRows').innerHTML = b.map(([ip, v]) => `<div class="row row--ban"><span class="mono">${esc(ip)}</span><span class="cut dim">${esc(v.reason)}</span><button class="link" data-unban="${esc(ip)}" type="button">Снять</button></div>`).join('') || '<p class="empty">Список пуст.</p>';
-  renderShield();
 }
 $('#banRows').onclick = async e => { const b = e.target.closest('[data-unban]'); if (b) { S.bans = await api('/bans', { method: 'DELETE', body: { ip: b.dataset.unban } }); renderSecurity(); } };
-$('#lockBtn').onclick = async () => { const r = await api('/lockdown', { method: 'POST', body: { on: !(S.lock && S.lock.on) } }); if (r.error) return toast(r.error, true); S.lock = r; renderShield(); };
 $('#simBtn').onclick = () => api('/simulate', { method: 'POST' });
 $('#patrolBtn').onclick = async () => {
   const v = $('#verdict'), b = $('#patrolBtn'); b.disabled = true; v.classList.add('busy'); v.textContent = 'Sentinel читает журнал…';
@@ -309,22 +254,16 @@ async function renderModels() {
   await ensureModels(); const q = $('#mSearch').value.trim().toLowerCase(), k = S.quota || {};
   const list = models.filter(m => (m.id + m.name).toLowerCase().includes(q));
   $('#mCount').textContent = models.length;
-  const c = k.claude || {}, o = k.ollama || {}, brainSet = k.brainSetting || 'free';
-  $$('#brainBox [data-brain]').forEach(b => b.classList.toggle('on', b.dataset.brain === brainSet));
-  $$('#brainBox .brain__opt').forEach(el => el.classList.toggle('show', el.dataset.for === brainSet));
-  $('#brainState').textContent = brainSet === 'claude' ? (c.available ? `Claude ${c.model} · ${c.used}/${c.cap} за час` : 'Claude не найден — работают бесплатные модели')
-    : brainSet === 'ollama' ? (o.up ? `Ollama · ${o.model} · ${o.used} за час` : `Ollama недоступна (${o.base}) — работают бесплатные модели`)
-    : 'бесплатные модели OpenRouter';
+  const c = k.claude || {}, isCl = k.brain === 'claude';
+  $$('#brainBox [data-brain]').forEach(b => b.classList.toggle('on', b.dataset.brain === k.brain));
+  $('#brainState').textContent = isCl ? `Claude ${c.model} · ${c.used}/${c.cap} за час` : c.available ? 'бесплатные модели' : 'Claude не найден на этом компьютере';
   if (document.activeElement !== $('#clCap')) $('#clCap').value = c.cap ?? 600;
   $('#clModel').value = c.model || 'haiku';
-  if (document.activeElement !== $('#olModel')) $('#olModel').value = o.model || 'llama3.2';
-  $('#quotaNote').textContent = (brainSet === 'claude'
-    ? `Агенты думают через Claude (твой вход в Claude Code на этом ПК) — это расходует лимиты твоего плана Claude, поэтому стоит потолок ${c.cap} запросов в час. Модель вызывается без инструментов: страница из интернета не может ничего запустить на ноутбуке. `
-    : brainSet === 'ollama'
-    ? `Агенты думают через Ollama по адресу ${o.base}. Локальная Ollama (http://127.0.0.1:11434) — бесплатно и без лимита; облако ollama.com — с кредитами. ${o.up ? '' : 'Сейчас не отвечает, поэтому используются бесплатные модели OpenRouter. '}`
+  $('#quotaNote').textContent = (isCl
+    ? `Агенты думают через Claude (твой вход в Claude Code на этом компьютере) — запросы расходуют лимиты твоего плана Claude, поэтому стоит потолок ${c.cap} запросов в час. Claude вызывается без инструментов: страница из интернета не может ничего запустить на ноутбуке. Если Claude недоступен, сервер сам переходит на бесплатные модели. `
     : `Агенты думают через бесплатные модели OpenRouter (:free). `) +
     `Платные модели OpenRouter заблокированы на уровне сервера; бесплатных запросов сегодня ${k.used ?? 0} из ${k.cap ?? 0}. Когда лимиты кончаются, агенты продолжают ходить по сети на автопилоте.` +
-    (brainSet === 'claude' && c.error ? ` Ошибка Claude: ${c.error}` : brainSet === 'ollama' && o.error ? ` Ошибка Ollama: ${o.error}` : '');
+    (c.error ? ` Последняя ошибка Claude: ${c.error}` : '');
   $('#modelRows').innerHTML = list.map(m => `<div class="row row--model"><span class="cut">${esc(m.name)}</span><span class="mono dim cut">${esc(m.id)}</span><span class="mono dim">${m.ctx ? Math.round(m.ctx / 1000) + 'k ctx' : ''}</span></div>`).join('') || '<p class="empty">Модели не загружены — проверь ключ OpenRouter в .env.</p>';
 }
 $('#mSearch').oninput = renderModels;
@@ -332,7 +271,6 @@ const saveBrain = async body => { const r = await api('/settings', { method: 'PO
 $('#brainBox').onclick = e => { const b = e.target.closest('[data-brain]'); if (b) saveBrain({ brain: b.dataset.brain }); };
 $('#clModel').onchange = e => saveBrain({ claudeModel: e.target.value });
 $('#clCap').onchange = e => saveBrain({ claudePerHour: +e.target.value });
-$('#olModel').onchange = e => saveBrain({ ollamaModel: e.target.value.trim() || 'llama3.2' });
 
 // ---------- граф ----------
 const graph = (() => {
@@ -432,7 +370,6 @@ function connect() {
   const es = new EventSource('/api/events');
   es.addEventListener('live', e => { onLive(JSON.parse(e.data)); renderStrip(); });
   es.addEventListener('cam', e => { const d = JSON.parse(e.data); follow = d.pin; followLabel(); if (d.entry) show(d.entry); });
-  es.addEventListener('goal', e => { S.goal = JSON.parse(e.data); renderGoal(); });
   es.addEventListener('chat', e => chatLine(JSON.parse(e.data)));
   es.addEventListener('astate', e => {
     const d = JSON.parse(e.data), a = agent(d.id); if (!a) return; a.state = d.state; a.target = d.target;
@@ -440,72 +377,23 @@ function connect() {
     $('#sActive').textContent = S.agents.filter(v => v.state && v.state !== 'idle').length;
   });
   es.addEventListener('agents', e => { S.agents = JSON.parse(e.data); renderAgents(); renderStrip(); graph.sync(); });
-  es.addEventListener('threat', e => { const ev = JSON.parse(e.data); S.events.push(ev); if (S.events.length > 300) S.events.shift(); renderSecurity(); if (ev.kind !== 'ban') toast(`${ev.kind.toUpperCase()} · ${ev.ip}\n${ev.detail}`, true); });
+  es.addEventListener('threat', e => { const ev = JSON.parse(e.data); S.events.push(ev); renderSecurity(); if (ev.kind !== 'ban') toast(`${ev.kind.toUpperCase()} · ${ev.ip}\n${ev.detail}`, true); });
   es.addEventListener('bans', e => { S.bans = JSON.parse(e.data); renderSecurity(); });
-  es.addEventListener('defender', e => { S.defender = JSON.parse(e.data); renderDefender(); });
-  es.addEventListener('sec', e => { S.sec = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
-  es.addEventListener('lock', e => { S.lock = JSON.parse(e.data); renderShield(); toast(S.lock.on ? '🛡 Карантин включён — внешний доступ закрыт' : 'Карантин снят', S.lock.on); });
-  es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); if (location.hash === '#models') renderModels(); });
+  es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); });
   es.addEventListener('settings', e => { S.settings = JSON.parse(e.data); renderStrip(); });
   es.addEventListener('sys', e => { S.sys = JSON.parse(e.data); });
 }
 (async () => {
   route();
   const s = await api('/state');
-  if (s.error) {
-    $('#heroStat').textContent = 'Локальная панель · 127.0.0.1:7777';
-    if (!['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
-      const notice = document.createElement('div');
-      notice.className = 'hosted-notice';
-      notice.append('На Vercel открыта витрина. Для агентов, чата и Microsoft Defender запусти сервер на своём ноутбуке и ');
-      const link = document.createElement('a');
-      link.href = 'http://127.0.0.1:7777/#live';
-      link.textContent = 'открой локальную панель';
-      notice.append(link, '.');
-      notice.classList.add('hosted-banner');
-      document.body.prepend(notice);
-      document.body.classList.add('hosted-preview');
-      $('#hostedChat').hidden = false;
-      $('#chatForm').hidden = true;
-      $('.view:not(#v-live), #v-live .live__main, #v-live .feed').forEach(view => { view.inert = true; });
-    }
-    return;
-  }
+  if (s.error) { $('#heroStat').textContent = 'Сервер недоступен'; return; }
   const liveLog = s.live; S = { ...s, live: [] };
   $('#spawnT').innerHTML = '<option value="">Смешанный состав</option>' + S.templates.map(t => `<option value="${esc(t.key)}">${esc(t.role)}</option>`).join('');
   graph.sync(); liveLog.forEach(e => onLive(e, true));
   (s.chat || []).forEach(chatLine); $('#chat').scrollTop = $('#chat').scrollHeight;
   camOk = !!s.cam?.available; follow = s.cam?.pin || null; followLabel(); setStage(stageMode);
   const last = s.cam?.entry || [...liveLog].reverse().find(e => e.type === 'page' || e.type === 'search'); if (last) show(last);
-  renderStrip(); renderAgents(); renderSecurity(); renderTiles(); renderGoal(); connect();
+  renderStrip(); renderAgents(); renderSecurity(); renderTiles(); connect();
   if (location.hash === '#models') renderModels();
   if (!s.keyOk) toast('Ключ OpenRouter не найден в .env — агенты работают на автопилоте', true);
-})();
-
-(async function loadAccount() {
-  if (location.hostname !== 'ultrasquad.vercel.app') return;
-  const account = document.querySelector('#account');
-  const notice = document.querySelector('#accountStatus');
-  try {
-    const response = await fetch('/api/auth');
-    const data = await response.json();
-    if (!data.configured) return;
-    account.hidden = false;
-    const status = new URL(location.href).searchParams.get('auth');
-    if (data.user) {
-      notice.textContent = data.user.name;
-      account.querySelector('form').hidden = false;
-    } else {
-      if (status === 'failed') notice.textContent = 'Не удалось войти. Попробуй ещё раз.';
-      const links = account.querySelector('#loginLinks');
-      for (const link of links.querySelectorAll('a')) {
-        const provider = new URL(link.href).searchParams.get('provider');
-        link.hidden = !data.providers.includes(provider);
-      }
-      links.hidden = false;
-    }
-    if (status) history.replaceState(null, '', location.pathname + location.hash);
-  } catch {
-    // The published site can load even when the optional account service is offline.
-  }
 })();
