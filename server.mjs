@@ -54,6 +54,12 @@ let activeAgentId = null;
 const assets = new Map([
   ['/', ['home.html', 'text/html; charset=utf-8']],
   ['/console', ['index.html', 'text/html; charset=utf-8']],
+  ['/video/', ['video/host.html', 'text/html; charset=utf-8']],
+  ['/video/view', ['video/index.html', 'text/html; charset=utf-8']],
+  ['/video/host.js', ['video/host.js', 'text/javascript; charset=utf-8']],
+  ['/video/viewer.js', ['video/viewer.js', 'text/javascript; charset=utf-8']],
+  ['/video/rtc.js', ['video/rtc.js', 'text/javascript; charset=utf-8']],
+  ['/video/broadcast.css', ['video/broadcast.css', 'text/css; charset=utf-8']],
   ['/home.css', ['home.css', 'text/css; charset=utf-8']],
   ['/home.js', ['home.js', 'text/javascript; charset=utf-8']],
   ['/live.js', ['live.js', 'text/javascript; charset=utf-8']],
@@ -185,7 +191,7 @@ function ingest(rows, changes = {}) {
   save({ ...state, ...changes, events, agentStats, seen: [...seen].slice(-5000), imported: state.imported + fresh.length });
   if (fresh.length) live.publish('input', 'Принято событий: ' + fresh.length + ' · Сигналов: ' + matches.size);
   for (const { agent, processed, flagged } of runs) {
-    live.publish(flagged ? 'alert' : 'analysis', 'Проверено: ' + processed + ' · Сигналов: ' + flagged, agent.name);
+    live.publish(flagged ? 'alert' : 'analysis', 'Проверено: ' + processed + ' · Сигналов: ' + flagged + ' · Порог: ' + agent.threshold + ' за 10 мин', agent.name);
     if (flagged && apiKey && agent.allowBrief && agent.autoBrief) summaryQueue.add(agent.id);
   }
   return { added: fresh.length, flagged: matches.size };
@@ -338,7 +344,7 @@ async function runQueue() {
 }
 
 const server = createServer(async (req, res) => {
-  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https://d8j0ntlcm91z4.cloudfront.net; media-src https://d8j0ntlcm91z4.cloudfront.net; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https://d8j0ntlcm91z4.cloudfront.net; media-src 'self' blob: https://d8j0ntlcm91z4.cloudfront.net; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Cache-Control', 'no-store');
