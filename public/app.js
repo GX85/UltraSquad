@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   const $ = selector => document.querySelector(selector);
-  const sections = { overview: 'Обзор', agents: 'Агенты', live: 'Прямой эфир', events: 'Журнал', models: 'Модели' };
+  const sections = { overview: 'Обзор', agents: 'Агенты', chat: 'Чат агентов', code: 'Ревью кода', live: 'Лента действий', events: 'Журнал', models: 'Модели' };
   const statuses = { new: 'Открыт', reviewed: 'Проверен', logged: 'Без сигнала' };
   const dates = new Intl.DateTimeFormat('ru', { dateStyle: 'short', timeStyle: 'medium' });
   const times = new Intl.DateTimeFormat('ru', { timeStyle: 'medium' });
@@ -43,6 +43,7 @@
     });
     $('#crumb').textContent = sections[section];
     window.scrollTo(0, 0);
+    if (section === 'chat') $('#room-feed').scrollTop = $('#room-feed').scrollHeight;
   }
   function modelOptions(agent) {
     const list = models.some(model => model.id === agent.model) ? models : [...models, { id: agent.model, label: agent.model }];
@@ -94,13 +95,38 @@
       ? '<p>' + escape(brief.agent) + ' · ' + escape(brief.model) + ' · ' + escape(dates.format(new Date(brief.time))) + '</p><pre>' + escape(brief.text) + '</pre>'
       : '<p class="empty">Сводка появится после запроса к модели.</p>';
   }
+  const roomKinds = { note: 'Заметка', report: 'Отчёт', signal: 'Сигнал', request: 'Запрос подмоги',
+    support: 'Сверка', summary: 'Сводка модели', code: 'Ревью' };
+  function supportButton(eventId) {
+    return '<button type="button" class="ghost support-button" data-support="' + escape(eventId) + '">Вызвать подмогу</button>';
+  }
+  function renderRoom() {
+    const filter = $('#room-filter').value;
+    const posts = (state.room || []).filter(post => filter === 'all' || ['signal', 'request', 'support', 'code'].includes(post.kind));
+    const supported = new Set((state.room || []).filter(post => post.kind === 'support').map(post => post.eventId));
+    const eventIds = new Set(state.events.map(event => event.id));
+    const feed = $('#room-feed');
+    const key = filter + ':' + posts.map(post => post.id).join(',') + ':' + state.imported;
+    if (feed.dataset.key === key) return;
+    const atEnd = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 90 || !feed.dataset.key;
+    feed.dataset.key = key;
+    feed.innerHTML = posts.map(post => '<article class="room-post" data-kind="' + escape(post.kind) + '">'
+      + '<div class="room-avatar" aria-hidden="true">' + escape(post.author.slice(0, 1).toUpperCase()) + '</div>'
+      + '<div class="room-bubble"><header><strong>' + escape(post.author) + '</strong><span>' + escape(roomKinds[post.kind])
+      + '</span><time datetime="' + escape(post.time) + '">' + escape(dates.format(new Date(post.time))) + '</time></header>'
+      + '<p>' + escape(post.text) + '</p>'
+      + (post.kind === 'signal' && eventIds.has(post.eventId) && !supported.has(post.eventId) ? supportButton(post.eventId) : '')
+      + '</div></article>').join('') || '<p class="empty">Сообщений по этому фильтру пока нет.</p>';
+    if (atEnd) feed.scrollTop = feed.scrollHeight;
+  }
   function signalDetails(event) {
     if (!event.agent) return '—';
-    if (!event.evidence?.length) return escape(event.agent);
-    const items = event.evidence.map(item => '<li><strong>' + escape(item.name) + '</strong> · '
+    const items = (event.evidence || []).map(item => '<li><strong>' + escape(item.name) + '</strong> · '
       + item.count + ' событий за 10 мин, порог ' + item.threshold + '</li>').join('');
     return '<details class="signal-detail" data-evidence="' + escape(event.id) + '"><summary>' + escape(event.agent)
-      + '</summary><p>Источник ' + escape(event.source) + '</p><ul>' + items + '</ul></details>';
+      + '</summary><p>Источник ' + escape(event.source) + '</p>' + (items ? '<ul>' + items + '</ul>' : '')
+      + (!(state.room || []).some(post => post.kind === 'support' && post.eventId === event.id) ? supportButton(event.id) : '')
+      + '</details>';
   }
   function showTable(element, events, review = false) {
     const opened = new Set(Array.from(element.querySelectorAll('details[open]'), detail => detail.dataset.evidence));
@@ -170,6 +196,7 @@
     if (!dirty || options.forceEditor) renderEditor();
     else renderBrief();
     renderEvents();
+    renderRoom();
     renderRuntime();
     window.updateSignal(state.events);
   }
@@ -236,6 +263,41 @@
     dirty = false;
     renderAgentList();
     renderEditor();
+  });
+  $('#code-form').addEventListener('submit', event => {
+    event.preventDefault();
+    run(event.submitter, async () => {
+      const result = await api('source-review', { source: $('#source-code').value, scope: $('#code-scope').value });
+      $('#code-result').innerHTML = result.findings.length
+        ? '<ol>' + result.findings.map(item => '<li><strong>Строка ' + item.line + ' · ' + escape(item.title)
+          + '</strong><p>' + escape(item.fix) + '</p></li>').join('') + '</ol>'
+        : '<p>Совпадений по пяти правилам нет.</p>';
+      await refresh();
+      notify('Отчёт добавлен в чат.');
+    });
+  });
+  $('#room-filter').addEventListener('change', () => { if (state) renderRoom(); });
+  $('#room-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const field = $('#room-note');
+    run(event.submitter, async () => {
+      await api('room-note', { text: field.value });
+      field.value = '';
+      $('#room-filter').value = 'all';
+      await refresh();
+      $('#room-feed').scrollTop = $('#room-feed').scrollHeight;
+    });
+  });
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button[data-support]');
+    if (!button) return;
+    run(button, async () => {
+      await api('support', { eventId: button.dataset.support });
+      location.hash = 'chat';
+      await refresh();
+      $('#room-feed').scrollTop = $('#room-feed').scrollHeight;
+      notify('Ответ агента добавлен в чат.');
+    });
   });
   $('#event-table').addEventListener('click', event => {
     const control = event.target.closest('[data-review]');

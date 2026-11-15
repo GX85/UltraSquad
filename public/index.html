@@ -20,7 +20,10 @@
     <nav aria-label="Разделы консоли">
       <a href="#overview" data-nav="overview">Обзор</a>
       <a href="#agents" data-nav="agents">Агенты</a>
-      <a href="#live" data-nav="live">Прямой эфир <span class="stream-dot" aria-hidden="true"></span></a>
+      <a href="#chat" data-nav="chat">Чат агентов</a>
+      <a href="#code" data-nav="code">Ревью кода</a>
+      <a href="/video/">Прямой эфир <span class="stream-dot" aria-hidden="true"></span></a>
+      <a href="#live" data-nav="live">Лента действий</a>
       <a href="#events" data-nav="events">Журнал</a>
       <a href="#models" data-nav="models">Модели</a>
     </nav>
@@ -66,8 +69,30 @@
       </div>
       <section class="brief-panel"><div class="section-head"><h2>Сводка модели</h2></div><p class="muted">В OpenRouter передаются категория и три счётчика выбранного агента.</p><div id="brief"></div></section>
     </section>
+    <section id="code" class="page" hidden>
+      <div class="headline"><div><h1>Ревью кода</h1><p class="intro">Локальная проверка JavaScript по пяти правилам. Совпадения требуют ручной проверки.</p></div></div>
+      <form id="code-form" class="room-panel code-panel">
+        <label for="code-scope">Домен или компонент <input id="code-scope" name="scope" maxlength="100" placeholder="Например, api.example.com"></label>
+        <label for="source-code">Исходный код</label>
+        <textarea id="source-code" name="source" rows="12" maxlength="120000" spellcheck="false" required></textarea>
+        <button type="submit">Проверить и отправить в чат</button>
+      </form>
+      <div id="code-result" class="code-results" aria-live="polite"></div>
+    </section>
+    <section id="chat" class="page" hidden>
+      <div class="headline"><div><h1>Чат агентов</h1><p class="intro chat-intro">Отчёты проверок, запросы подмоги и заметки оператора.</p></div><a class="button" href="/video/">Смотреть видеоэфир ↗</a></div>
+      <div class="room-panel">
+        <div class="room-toolbar"><label for="room-filter">Сообщения</label><select id="room-filter"><option value="all">Все</option><option value="incidents">Сигналы и подмога</option></select></div>
+        <div id="room-feed" class="room-feed" role="log" aria-live="polite" aria-relevant="additions text"><p class="empty">Ожидание сообщений</p></div>
+        <form id="room-form" class="room-form">
+          <label class="visually-hidden" for="room-note">Заметка оператора</label>
+          <input id="room-note" name="text" maxlength="800" placeholder="Заметка оператора" required>
+          <button type="submit">Отправить</button>
+        </form>
+      </div>
+    </section>
     <section id="live" class="page" hidden>
-      <div class="headline"><div><p class="eyebrow" id="stream-state">Соединение с сервером</p><h1>Прямой эфир</h1></div><div><a href="/video/">Открыть видеоэфир ↗</a> <button id="feed-pause" type="button">Пауза ленты</button></div></div>
+      <div class="headline"><div><p class="eyebrow" id="stream-state">Соединение с сервером</p><h1>Лента действий</h1></div><div><a class="button" href="/video/">Открыть видеоэфир ↗</a> <button id="feed-pause" type="button">Пауза ленты</button></div></div>
       <p class="intro">Действия сервера, обработка журнала и запросы моделей появляются по мере выполнения.</p>
       <div class="live-grid">
         <section class="live-chart"><div class="section-head"><h2>Обработка агентами</h2></div><p class="muted">События за всё время работы агента</p><div id="agent-chart"></div></section>

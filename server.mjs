@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readTelemetry } from './telemetry.mjs';
 import { readWindows } from './windows-events.mjs';
+import { reviewSource } from './source-review.mjs';
 import { createLiveFeed } from './live.mjs';
 import { join } from 'node:path';
 
@@ -51,6 +52,7 @@ let state = {
   windowsRead: saved.windowsRead || 0,
   windowsBootstrap: Boolean(saved.windowsBootstrap),
   agentStats: saved.agentStats || {},
+  room: saved.room || [],
   autoCalls: (saved.autoCalls || []).filter(at => at >= Date.now() - 86400000)
 };
 if (process.platform === 'win32' && !saved.windowsBootstrap) {
@@ -64,6 +66,16 @@ if (process.platform === 'win32' && !saved.windowsBootstrap) {
       mark: '◇', color: 'cyan', model: baseModel.id, allowBrief: true, autoBrief: false, source: '' });
   }
   state.windowsBootstrap = true;
+}
+if (!saved.room) {
+  state.room = state.agents.flatMap(agent => {
+    const stats = state.agentStats[agent.id];
+    if (!stats?.lastRun) return [];
+    const signal = state.events.find(event => event.matches?.includes(agent.id));
+    const post = roomPost(agent.name, signal ? 'signal' : 'report',
+      'Сохранённый отчёт · Обработано: ' + stats.processed + ' · Сигналов: ' + stats.flagged, signal?.id);
+    return [{ ...post, time: stats.lastRun }];
+  }).sort((a, b) => a.time.localeCompare(b.time));
 }
 let apiKey = process.env.OPENROUTER_API_KEY?.trim() || '';
 let models = [baseModel];
@@ -137,7 +149,7 @@ function snapshot() {
   return {
     agents: state.agents, events: state.events, imported: state.imported,
     brief: state.brief, connected: Boolean(apiKey), types, demoLoaded: state.demoLoaded,
-    runtime: status(), limit, modelHistory: state.modelHistory
+    runtime: status(), limit, modelHistory: state.modelHistory, room: state.room
   };
 }
 
@@ -180,6 +192,7 @@ function ingest(rows, changes = {}) {
     let processed = 0;
     let flagged = 0;
     let latest;
+    let latestSignal;
     for (const event of history) {
       if (event.type !== agent.type || (agent.source && agent.source !== event.source)) continue;
       const queue = bySource.get(event.source) || [];
@@ -195,12 +208,14 @@ function ingest(rows, changes = {}) {
         agents.push({ id: agent.id, name: agent.name, count: queue.length, threshold: agent.threshold });
         matches.set(event, agents);
         flagged++;
+        latestSignal = event;
       }
     }
-    if (processed) runs.push({ agent, processed, flagged, latest });
+    if (processed) runs.push({ agent, processed, flagged, latest, latestSignal });
   }
+  const eventIds = new Map(fresh.map(event => [event, randomUUID()]));
   const events = history.map(event => check.has(event)
-    ? { ...event, id: randomUUID(), agent: matchLabel(matches.get(event)),
+    ? { ...event, id: eventIds.get(event), agent: matchLabel(matches.get(event)),
         matches: (matches.get(event) || []).map(agent => agent.id),
         ...(matches.has(event) && { evidence: matches.get(event) }),
         status: matches.has(event) ? 'new' : 'logged' } : event)
@@ -214,13 +229,47 @@ function ingest(rows, changes = {}) {
       lastRun, lastSource: latest.source, lastEventTime: latest.time
     };
   }
-  save({ ...state, ...changes, events, agentStats, seen: [...seen].slice(-5000), imported: state.imported + fresh.length });
+  const reports = runs.map(({agent, processed, flagged, latestSignal}) =>
+    roomPost(agent.name, flagged ? 'signal' : 'report',
+      'Проверено: ' + processed + ' · Сигналов: ' + flagged + ' · ' + types[agent.type],
+      latestSignal ? eventIds.get(latestSignal) : undefined));
+  save({ ...state, ...changes, events, agentStats, room: appendRoom(reports), seen: [...seen].slice(-5000), imported: state.imported + fresh.length });
   if (fresh.length) live.publish('input', 'Принято событий: ' + fresh.length + ' · Сигналов: ' + matches.size);
   for (const { agent, processed, flagged } of runs) {
     live.publish(flagged ? 'alert' : 'analysis', 'Проверено: ' + processed + ' · Сигналов: ' + flagged + ' · Порог: ' + agent.threshold + ' за 10 мин', agent.name);
     if (flagged && apiKey && agent.allowBrief && agent.autoBrief) summaryQueue.add(agent.id);
   }
   return { added: fresh.length, flagged: matches.size };
+}
+
+function roomPost(author, kind, text, eventId) {
+  return { id: randomUUID(), author, kind, text, eventId, time: new Date().toISOString() };
+}
+function appendRoom(posts) {
+  return [...state.room, ...posts].slice(-200);
+}
+function requestSupport(eventId) {
+  const event = state.events.find(item => item.id === eventId && item.agent);
+  if (!event) fail(404, 'Сигнал больше не доступен в журнале.');
+  if (state.room.some(post => post.kind === 'support' && post.eventId === event.id)) {
+    fail(409, 'Этот сигнал уже проверен другим агентом.');
+  }
+  const end = Date.parse(event.time);
+  const candidates = state.agents.filter(agent => agent.enabled && agent.type !== event.type
+    && (!agent.source || agent.source === event.source));
+  if (!candidates.length) fail(409, 'Добавьте активного агента для другой категории событий.');
+  const helper = candidates.map(agent => ({
+    agent,
+    count: state.events.filter(item => item.type === agent.type && item.source === event.source
+      && Date.parse(item.time) >= end - 600000 && Date.parse(item.time) <= end).length
+  })).sort((a, b) => b.count - a.count)[0];
+  const message = 'Сверка источника ' + event.source + ' за 10 минут до сигнала. '
+    + types[helper.agent.type] + ': ' + helper.count + ' записей в сохранённом журнале.';
+  const request = roomPost('Оператор', 'request', 'Запросил сверку сигнала по источнику ' + event.source + '.', event.id);
+  const result = roomPost(helper.agent.name, 'support', message, event.id);
+  save({ ...state, room: appendRoom([request, result]) });
+  live.publish('analysis', message, helper.agent.name);
+  return result;
 }
 
 function matchLabel(agents = []) {
@@ -365,7 +414,8 @@ async function makeBrief(agentId, automatic = false) {
     }
     const brief = { agent: agent.name, model: result.model || agent.model, time: new Date().toISOString(), text: answer.slice(0, 5000) };
     if (state.agents.some(item => item.id === agent.id)) {
-      save({ ...state, brief, modelHistory: { ...state.modelHistory, [agent.id]: brief } });
+      save({ ...state, brief, modelHistory: { ...state.modelHistory, [agent.id]: brief },
+        room: appendRoom([roomPost(agent.name, 'summary', brief.text)]) });
     }
     live.publish('model', 'Получена сводка · ' + brief.model, agent.name);
     return brief;
@@ -418,10 +468,32 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/api/state') return reply(200, snapshot());
     if (req.method === 'GET' && path === '/api/runtime') return reply(200, status());
     if (req.method === 'GET' && path === '/api/live') return live.subscribe(req, res);
-    const routes = ['/api/demo', '/api/import', '/api/agents', '/api/review', '/api/models', '/api/watch', '/api/toggle', '/api/add-agents', '/api/remove-agent', '/api/key', '/api/brief'];
+    const routes = ['/api/demo', '/api/import', '/api/agents', '/api/review', '/api/models', '/api/watch', '/api/toggle', '/api/add-agents', '/api/remove-agent', '/api/key', '/api/brief', '/api/room-note', '/api/support', '/api/source-review'];
     if (req.method !== 'POST' || !routes.includes(path)) fail(404, 'Страница не найдена.');
     const body = await readJson(req);
     if (path === '/api/demo') return reply(200, demo());
+    if (path === '/api/support') return reply(200, requestSupport(body.eventId));
+    if (path === '/api/source-review') {
+      if (typeof body.source !== 'string' || !body.source.trim() || Buffer.byteLength(body.source) > 120000) {
+        fail(400, 'Вставьте исходный код размером до 120 КБ.');
+      }
+      const scope = typeof body.scope === 'string' ? body.scope.trim() : '';
+      if (scope.length > 100) fail(400, 'Сократите название домена или компонента до 100 символов.');
+      const findings = reviewSource(body.source);
+      const text = findings.length
+        ? findings.length + ' замечаний для ручной проверки.\n' + findings.map(item => 'Строка ' + item.line + ' · ' + item.title + '. ' + item.fix).join('\n')
+        : 'Завершена локальная проверка по пяти правилам. Совпадений нет.';
+      save({ ...state, room: appendRoom([roomPost('Ревью кода', 'code', scope ? scope + '\n' + text : text)]) });
+      live.publish('analysis', 'Локальное ревью кода · Замечаний: ' + findings.length, 'Ревью кода');
+      return reply(200, { findings });
+    }
+    if (path === '/api/room-note') {
+      const text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!text || text.length > 800) fail(400, 'Напишите заметку длиной от 1 до 800 символов.');
+      const post = roomPost('Оператор', 'note', text);
+      save({ ...state, room: appendRoom([post]) });
+      return reply(200, post);
+    }
     if (path === '/api/add-agents') return reply(200, addAgents(body));
     if (path === '/api/remove-agent') {
       const removed = state.agents.find(agent => agent.id === body.id);
