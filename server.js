@@ -19,7 +19,10 @@ try {
   }
 } catch {}
 const PORT = +process.env.PORT || 7777;
-const HOST = process.env.HOST || '127.0.0.1';
+// Удалённый доступ (облако): ALLOW_REMOTE=1 + REMOTE_TOKEN=<секрет>. Без токена снаружи ничего не открыть.
+const REMOTE = process.env.ALLOW_REMOTE === '1';
+const TOKEN = process.env.REMOTE_TOKEN || '';
+const HOST = process.env.HOST || (REMOTE ? '0.0.0.0' : '127.0.0.1');
 const OR_KEY = process.env.OPENROUTER_API_KEY || '';
 const PUB = path.join(__dirname, 'public');
 const DATA = path.join(__dirname, 'data');
@@ -766,25 +769,42 @@ async function api(req, res, url) {
   return json(res, 404, { error: 'not found' });
 }
 
+function reqToken(req) {
+  const q = (req.url.split('?')[1] || ''); const m = q.match(/(?:^|&)token=([^&]+)/); if (m) return decodeURIComponent(m[1]);
+  const c = (req.headers.cookie || '').match(/(?:^|;\s*)us_token=([^;]+)/); if (c) return decodeURIComponent(c[1]);
+  return req.headers['x-token'] || '';
+}
+// доверенный = свой компьютер, либо снаружи с верным токеном (в удалённом режиме)
+const trusted = (req, ip) => isLocal(ip) || (REMOTE && !!TOKEN && reqToken(req) === TOKEN);
+const LOGIN = '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>UltraSquad</title><body style="margin:0;height:100vh;display:grid;place-items:center;background:#07070f;color:#fff;font-family:system-ui"><form style="text-align:center"><div style="font-size:22px;letter-spacing:.1em;margin-bottom:18px">ULTRASQUAD</div><input name=token type=password placeholder="Токен доступа" autofocus style="padding:12px 16px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;font-size:16px;width:240px"><button style="display:block;margin:12px auto 0;padding:11px 24px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font-size:15px;cursor:pointer">Войти</button></form></body>';
+
 const server = http.createServer(async (req, res) => {
   const ip = norm(req.socket.remoteAddress);
   const url = (req.url || '/').split('?')[0];
-  if (bans[ip] && !isLocal(ip)) { res.writeHead(403); return res.end('banned'); }
-  if (lock.on && !isLocal(ip)) { res.writeHead(503, { 'Retry-After': '120', 'Content-Type': 'text/plain' }); return res.end('Service temporarily unavailable'); }
+  const ok = trusted(req, ip);
+  if (bans[ip] && !ok) { res.writeHead(403); return res.end('banned'); }
+  if (lock.on && !ok) { res.writeHead(503, { 'Retry-After': '120', 'Content-Type': 'text/plain' }); return res.end('Service temporarily unavailable'); }
   const trap = HONEYPOTS.some(h => url.toLowerCase().startsWith(h));
-  const verdict = isLocal(ip) && !trap ? null : inspect(req, ip);
+  const verdict = ok && !trap ? null : inspect(req, ip);
   if (verdict) { res.writeHead(verdict === 'honeypot' ? 200 : 400, { 'Content-Type': 'text/html' }); return res.end(verdict === 'honeypot' ? '<html><body><form>Login</form></body></html>' : 'Bad Request'); }
+  // в удалённом режиме выставляем cookie при верном ?token= и просим токен у чужих
+  const setCookie = [];
+  if (REMOTE && TOKEN && new URLSearchParams(req.url.split('?')[1] || '').get('token') === TOKEN) setCookie.push(`us_token=${encodeURIComponent(TOKEN)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
   try {
     if (url.startsWith('/api/')) {
-      // API доступен только с этого компьютера; защита от DNS-rebinding и CSRF
-      const hostOk = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '');
-      const origin = req.headers.origin;
-      if (!isLocal(ip) || !hostOk || (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin))) return json(res, 403, { error: 'API доступен только с localhost' });
+      if (isLocal(ip)) {
+        const hostOk = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '');
+        const origin = req.headers.origin;
+        if (!hostOk || (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin))) return json(res, 403, { error: 'API доступен только с localhost' });
+      } else if (!(REMOTE && TOKEN && reqToken(req) === TOKEN)) {
+        return json(res, 403, { error: 'Нужен токен доступа' });
+      }
       return await api(req, res, url);
     }
+    if (REMOTE && !ok) { res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', ...(setCookie.length ? { 'Set-Cookie': setCookie } : {}) }); return res.end(LOGIN); }
     const f = path.normalize(path.join(PUB, url === '/' ? 'index.html' : url));
     if (!f.startsWith(PUB) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end('404'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...(setCookie.length ? { 'Set-Cookie': setCookie } : {}) });
     fs.createReadStream(f).pipe(res);
   } catch (e) { log('http', url, e.message); if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
 });
