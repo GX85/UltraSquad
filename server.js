@@ -115,7 +115,7 @@ const lastEntry = new Map();
 function direct(e, force) {
   lastEntry.set(e.agent, e); const now = Date.now();
   // закреплённый агент — только он; иначе держим кадр минимум 10 секунд, чтобы страницу успели увидеть
-  if (!force && (air.pin ? e.agent !== air.pin : (air.entry && e.agent !== air.entry.agent && now - air.since < 10000))) return;
+  if (!force && (air.pin ? e.agent !== air.pin : (air.entry && e.agent !== air.entry.agent && now - air.since < 6000))) return;
   air.entry = e; air.since = now; push('cam', { entry: e, pin: air.pin });
   cam.show(e.type === 'search' ? 'https://hn.algolia.com/?q=' + encodeURIComponent(e.query) : e.url);
 }
@@ -168,7 +168,7 @@ async function answerUser(text) {
 const RT = new Map(); // состояние агентов в памяти
 function rt(a) {
   let r = RT.get(a.id);
-  if (!r) { r = { state: 'idle', target: '', obs: null, visited: [], queries: [], busy: false, nextAt: Date.now() + Math.random() * Math.max(8000, agents.length * 650) }; RT.set(a.id, r); } // старт вразброс, без залпа
+  if (!r) { r = { state: 'idle', target: '', obs: null, visited: [], queries: [], busy: false, nextAt: Date.now() + Math.random() * 15000 }; RT.set(a.id, r); } // старт в пределах 15с — быстро выходим на полную активность
   return r;
 }
 function setState(a, state, target = '') { const r = rt(a); r.state = state; r.target = target; push('astate', { id: a.id, state, target }); }
@@ -352,7 +352,8 @@ function takeSlot() {
 // ---------- движок автономных агентов ----------
 let active = 0;
 const browsers = () => agents.filter(a => a.enabled && a.permissions.includes('web.browse'));
-const stepDelay = () => Math.min(90000, Math.max(7000, browsers().length * 650)) * (0.75 + Math.random() * 0.5);
+// темп хождения: держим отряд заметно активным даже при сотнях агентов
+const stepDelay = () => Math.min(28000, Math.max(3500, browsers().length * 160)) * (0.7 + Math.random() * 0.6);
 const seen = (r, u) => r.visited.includes(u);
 
 function heuristic(a, r) {
@@ -447,7 +448,7 @@ async function step(a) {
 setInterval(() => {
   if (!settings.running) return;
   const now = Date.now();
-  for (const a of browsers()) { const r = rt(a); if (!r.busy && r.nextAt <= now && active < 8) step(a); }
+  for (const a of browsers()) { const r = rt(a); if (!r.busy && r.nextAt <= now && active < 20) step(a); }
 }, 1000);
 
 // ---------- безопасность ----------
