@@ -79,8 +79,9 @@ function renderStrip() {
     $('#sLlm').textContent = `${q.used ?? 0}/${q.cap ?? 0}`;
     $('#sLlmLbl').textContent = 'Бесплатные модели · ' + (q.exhausted || q.used >= q.cap ? 'лимит исчерпан' : q.cooldown > 0 ? 'пауза api' : 'сегодня');
   }
-  const run = S.settings.running;
-  $('#sStatus').classList.toggle('paused', !run); $('#sStatus em').textContent = run ? 'Эфир' : 'Пауза';
+  const run = S.settings.running, mob = (S.defense || {}).mode === 'mobilized';
+  $('#sStatus').classList.toggle('paused', !run); $('#sStatus').classList.toggle('mobilized', mob);
+  $('#sStatus em').textContent = mob ? 'Мобилизация' : run ? 'Эфир' : 'Пауза';
   $('#runBtn').textContent = run ? 'Пауза' : 'Запуск';
   $('#heroStat').textContent = `${S.agents.length} агентов · ${pages} страниц прочитано · ${run ? 'эфир идёт' : 'пауза'}`;
 }
@@ -253,6 +254,17 @@ function renderShield() {
   const d = S.defender || {};
   $('#defSub').textContent = d.error ? d.error : d.available === null || d.available === undefined ? 'Статус недоступен' :
     `${d.available ? 'включён' : 'выключен'}, защита в реальном времени ${d.realtime ? 'вкл' : 'выкл'}` + (d.activeThreats ? `, активных угроз: ${d.activeThreats}` : ', угроз нет');
+  const mob = (S.defense || {}).mode === 'mobilized';
+  $('#shield').classList.toggle('mobilized', mob);
+  $('#mobTitle').textContent = mob ? 'МОБИЛИЗАЦИЯ · весь отряд на угрозе' : 'Мобилизация выключена';
+  $('#mobSub').textContent = mob ? `Тема: ${S.defense.topic || '—'} · отбой через ${Math.ceil((S.defense.remaining || 0) / 1000)} с` : 'Включится сама при шквале угроз';
+  $('#mobBtn').textContent = mob ? 'Отбой' : 'Мобилизовать отряд';
+  $('#mobBtn').className = 'btn btn--sm ' + (mob ? 'btn--danger' : 'btn--ghost');
+}
+function renderIntel() {
+  const list = [...(S.intel || [])].reverse();
+  $('#intelCount').textContent = list.length;
+  $('#intelRows').innerHTML = list.map(t => `<div class="row row--intel"><span class="tk ${esc(t.sev)}">${esc(t.kind)}</span><div><div class="intel__t">${esc(t.title)}</div><div class="intel__m">${esc(t.match)} · ${esc(t.host)}</div></div><a class="link intel__src" href="${esc(/^https?:\/\//.test(t.url) ? t.url : '#')}" target="_blank" rel="noopener noreferrer">${esc(t.by)}</a></div>`).join('') || '<p class="empty">Отряд прочёсывает сеть… реальные угрозы появятся здесь.</p>';
 }
 function renderSecurity() {
   const ev = [...S.events].reverse();
@@ -261,12 +273,14 @@ function renderSecurity() {
   const b = Object.entries(S.bans);
   $('#banCount').textContent = b.length;
   $('#banRows').innerHTML = b.map(([ip, v]) => `<div class="row row--ban"><span class="mono">${esc(ip)}</span><span class="cut dim">${esc(v.reason)}</span><button class="link" data-unban="${esc(ip)}" type="button">Снять</button></div>`).join('') || '<p class="empty">Список пуст.</p>';
-  renderShield();
+  renderShield(); renderIntel();
 }
 $('#banRows').onclick = async e => { const b = e.target.closest('[data-unban]'); if (b) { S.bans = await api('/bans', { method: 'DELETE', body: { ip: b.dataset.unban } }); renderSecurity(); } };
 $('#lockBtn').onclick = async () => { const r = await api('/lockdown', { method: 'POST', body: { on: !(S.lock && S.lock.on) } }); if (r.error) return toast(r.error, true); S.lock = r; renderShield(); };
 $('#defBtn').onclick = async () => { $('#defSub').textContent = 'Читаю статус Defender…'; const r = await api('/defender', { method: 'POST' }); if (r.status) { S.defender = r.status; renderShield(); } else if (r.error) $('#defSub').textContent = r.error; };
+$('#mobBtn').onclick = async () => { const on = (S.defense || {}).mode === 'mobilized'; const r = await api('/mobilize', { method: 'POST', body: { on: !on } }); if (r.mode) { S.defense = r; renderShield(); renderStrip(); } };
 $('#simBtn').onclick = () => api('/simulate', { method: 'POST' });
+$('#swarmBtn').onclick = async () => { const r = await api('/simulate', { method: 'POST', body: { swarm: true } }); if (r.swarm) toast(`Имитация своры: ${r.swarm} источников`, true); };
 $('#patrolBtn').onclick = async () => {
   const v = $('#verdict'), b = $('#patrolBtn'); b.disabled = true; v.classList.add('busy'); v.textContent = 'Sentinel читает журнал…';
   const r = await api('/patrol', { method: 'POST' });
@@ -412,6 +426,8 @@ function connect() {
   es.addEventListener('threat', e => { const ev = JSON.parse(e.data); S.events.push(ev); if (S.events.length > 300) S.events.shift(); renderSecurity(); if (ev.kind !== 'ban') toast(`${ev.kind.toUpperCase()} · ${ev.ip}\n${ev.detail}`, true); });
   es.addEventListener('bans', e => { S.bans = JSON.parse(e.data); renderSecurity(); });
   es.addEventListener('sec', e => { S.sec = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
+  es.addEventListener('intel', e => { const t = JSON.parse(e.data); S.intel = S.intel || []; S.intel.push(t); if (S.intel.length > 120) S.intel.shift(); if (location.hash === '#security') renderIntel(); if (t.sev === 'critical') toast(`Угроза [${t.kind}] ${t.match}\n${t.title}`, true); });
+  es.addEventListener('defense', e => { S.defense = JSON.parse(e.data); renderShield(); renderStrip(); if (S.defense.mode === 'mobilized') toast('⚔ МОБИЛИЗАЦИЯ — весь отряд на угрозе: ' + (S.defense.topic || ''), true); });
   es.addEventListener('lock', e => { S.lock = JSON.parse(e.data); renderShield(); toast(S.lock.on ? '🛡 Карантин включён — внешний доступ закрыт' : 'Карантин снят', S.lock.on); });
   es.addEventListener('defender', e => { S.defender = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
   es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); if (location.hash === '#models') renderModels(); });

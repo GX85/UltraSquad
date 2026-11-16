@@ -24,7 +24,7 @@ const PUB = path.join(__dirname, 'public');
 const DATA = path.join(__dirname, 'data');
 const LOGS = path.join(__dirname, 'logs');
 fs.mkdirSync(DATA, { recursive: true }); fs.mkdirSync(LOGS, { recursive: true });
-const MAX_AGENTS = 100;
+const MAX_AGENTS = 1000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rnd = a => a[Math.floor(Math.random() * a.length)];
 
@@ -49,15 +49,16 @@ const PERMS = {
   'security.ban':  'Банить IP атакующих',
   'system.info':   'Видеть состояние системы'
 };
+// Отряд прочёсывает интернет на реальные угрозы: вирусы, уязвимости, утечки, ботнеты, вредоносные агенты
 const TEMPLATES = [
-  { key: 'ai', role: 'ИИ и модели', mission: 'Следить за новостями ИИ и open-source моделей', seeds: ['open source LLM release', 'AI research news', 'machine learning breakthrough', 'local LLM inference'] },
-  { key: 'sec', role: 'Кибербезопасность', mission: 'Изучать свежие уязвимости и методы защиты', seeds: ['latest CVE vulnerability', 'ransomware attack analysis', 'web application security', 'honeypot intrusion detection'] },
-  { key: 'sci', role: 'Наука', mission: 'Находить научные открытия: физика, космос, биология', seeds: ['space telescope discovery', 'physics experiment result', 'genome research', 'exoplanet'] },
-  { key: 'hw', role: 'Железо', mission: 'Следить за чипами, робототехникой и железом', seeds: ['new processor architecture', 'robotics humanoid', 'RISC-V', 'GPU benchmark'] },
-  { key: 'dev', role: 'Разработка', mission: 'Следить за языками, инструментами и релизами ПО', seeds: ['programming language release notes', 'open source developer tools', 'Rust language', 'JavaScript runtime'] },
-  { key: 'oss', role: 'Open source', mission: 'Искать полезные бесплатные open-source проекты', seeds: ['awesome open source self-hosted', 'free software alternative', 'open source database', 'linux kernel'] },
-  { key: 'eco', role: 'Экономика', mission: 'Исследовать экономику, рынки и финтех', seeds: ['global economy outlook', 'central bank interest rates', 'fintech', 'semiconductor market'] },
-  { key: 'hist', role: 'Знания', mission: 'Изучать историю и культуру через энциклопедии', seeds: ['history of computing', 'ancient civilization', 'history of cryptography', 'industrial revolution'] }
+  { key: 'cve', role: 'Уязвимости', mission: 'Искать свежие уязвимости и эксплойты', seeds: ['critical CVE vulnerability', 'zero day exploit', 'remote code execution vulnerability', 'privilege escalation exploit'] },
+  { key: 'malware', role: 'Вирусы', mission: 'Выслеживать новые вирусы и вредоносное ПО', seeds: ['new malware campaign', 'trojan analysis', 'infostealer malware', 'rootkit discovery'] },
+  { key: 'ransom', role: 'Вымогатели', mission: 'Следить за атаками шифровальщиков', seeds: ['ransomware attack', 'ransomware gang', 'double extortion ransomware', 'ransomware victim'] },
+  { key: 'botnet', role: 'Ботнеты', mission: 'Отслеживать ботнеты и DDoS', seeds: ['botnet takedown', 'DDoS attack', 'command and control server', 'IoT botnet'] },
+  { key: 'rogue', role: 'Сбежавшие агенты', mission: 'Искать вредоносных и автономных ИИ-агентов', seeds: ['rogue AI agent', 'autonomous malware', 'malicious LLM agent', 'prompt injection attack'] },
+  { key: 'breach', role: 'Утечки', mission: 'Находить утечки данных и взломы', seeds: ['data breach', 'leaked database', 'credential leak', 'supply chain attack'] },
+  { key: 'phish', role: 'Фишинг', mission: 'Выявлять фишинг и мошенничество', seeds: ['phishing campaign', 'credential phishing', 'fake login page', 'crypto scam'] },
+  { key: 'threat', role: 'Разведка угроз', mission: 'Общая разведка киберугроз', seeds: ['threat intelligence report', 'APT group activity', 'security advisory', 'active exploitation in the wild'] }
 ];
 const NAMES = ['ATLAS', 'NOVA', 'ORION', 'VEGA', 'LYNX', 'ECHO', 'ONYX', 'HELIX', 'PULSE', 'RAVEN', 'ZENITH', 'CIPHER', 'DELTA', 'EMBER', 'FLUX', 'GHOST', 'HALO', 'ION', 'JADE', 'KRAIT'];
 
@@ -84,7 +85,7 @@ let dirty = false;
 const persist = () => { dirty = true; };
 function flush() {
   if (!dirty) return; dirty = false;
-  try { save('agents', agents); save('events', events.slice(-1000)); save('bans', bans); save('settings', settings); save('stats', stats); save('chat', chatLog); } catch (e) { log('persist', e); }
+  try { save('agents', agents); save('events', events.slice(-1000)); save('bans', bans); save('settings', settings); save('stats', stats); save('chat', chatLog); save('threats', threatIntel); } catch (e) { log('persist', e); }
 }
 setInterval(flush, 5000);
 
@@ -353,6 +354,7 @@ const seen = (r, u) => r.visited.includes(u);
 function heuristic(a, r) {
   const o = r.obs;
   const newQuery = () => {
+    if (defense.mode === 'mobilized' && defense.topic && Math.random() < 0.8) return defense.topic; // мобилизация: весь отряд на одну угрозу
     const fresh = (a.seeds || []).filter(s => !r.queries.includes(s));
     if (fresh.length) return rnd(fresh);
     if (o?.type === 'page' && o.title) return o.title.split(/[\s—–|:·-]+/).filter(w => w.length > 3).slice(0, 4).join(' ') || a.mission;
@@ -423,8 +425,9 @@ async function step(a) {
       a.steps++; r.errs = 0; persist();
       live(a, 'page', { url: p.url, host: p.host, title: p.title, text: p.text.slice(0, 2400), links: p.links.slice(0, 6), thought: d.thought, mode, model: d.model });
       const host = p.host.replace(/^www\./, ''), title = p.title.slice(0, 110);
-      if (r.helping) { say(a, 'finding', `${r.helping.for}, по теме «${r.helping.query}» нашёл: «${title}» — ${host}`, { url: p.url, to: r.helping.for }); r.helping = null; }
-      else if (quiet() && Math.random() < 0.3) say(a, 'finding', rnd([`Читаю «${title}» на ${host}.`, `Нашёл материал: «${title}» (${host}).`, `На связи. Изучаю ${host}: «${title}».`]), { url: p.url });
+      const threat = scanThreat(a, { title: p.title, text: p.text, url: p.url, host: p.host }); // реальная угроза на странице?
+      if (r.helping) { say(a, 'finding', threat ? `${r.helping.for}, по теме «${r.helping.query}» угроза [${threat.kind}]: «${title}» — ${host}` : `${r.helping.for}, по теме «${r.helping.query}»: «${title}» — ${host}`, { url: p.url, to: r.helping.for }); r.helping = null; }
+      else if (!threat && quiet() && Math.random() < 0.25) say(a, 'info', `Прочёсываю ${host}: «${title}» — чисто.`, { url: p.url });
     }
   } catch (e) {
     if (rt(a).obs?.type === 'results') rt(a).obs.items = rt(a).obs.items.filter(i => !seen(r, i.url));
@@ -482,6 +485,7 @@ function noteAttack() {
   const now = Date.now(); lock.hits = lock.hits.filter(t => now - t < lock.window); lock.hits.push(now);
   if (!lock.on && lock.hits.length >= lock.threshold) setLock(true, false, `${lock.hits.length} атак за минуту.`);
   else if (lock.on && !lock.manual) lock.until = now + lock.hold;
+  if (lock.hits.length >= 15 && defense.mode === 'calm') mobilize('DDoS botnet mitigation', `Массовая атака: ${lock.hits.length} за минуту.`); // свора → полная мобилизация
 }
 setInterval(() => { if (lock.on && !lock.manual && Date.now() > lock.until) setLock(false, false); }, 5000);
 
@@ -498,6 +502,67 @@ const defender = createMonitor((status, changed) => {
   const s = agents.find(x => x.enabled && x.permissions.includes('security.read'));
   if (changed && s) say(s, status.activeThreats || status.realtime === false ? 'alert' : 'info', 'Microsoft Defender. ' + defenderSummary(status));
 });
+
+// ---------- охота за реальными угрозами: агенты распознают их на реальных страницах ----------
+const THREAT_RULES = [
+  { re: /zero[-\s]?day|\b0-?day\b/i, kind: '0-day', sev: 'critical' },
+  { re: /\bCVE-\d{4}-\d{3,7}\b/i, kind: 'CVE', sev: 'high' },
+  { re: /ransomware|вымогател|шифровальщик/i, kind: 'ransomware', sev: 'critical' },
+  { re: /\b(botnet|ботнет)\b/i, kind: 'botnet', sev: 'high' },
+  { re: /rogue\s+(ai\s+)?agent|autonomous malware|malicious (ai\s+)?agent|сбежавш\w*\s+агент|prompt injection/i, kind: 'сбежавший агент', sev: 'high' },
+  { re: /data breach|утечк\w*\s+данн|leaked database|credential (leak|dump)/i, kind: 'утечка', sev: 'high' },
+  { re: /\b(remote code execution|\bRCE\b|privilege escalation|exploit(ed|ation)? in the wild)\b/i, kind: 'эксплойт', sev: 'high' },
+  { re: /supply[-\s]chain (attack|compromise)/i, kind: 'supply-chain', sev: 'high' },
+  { re: /\b(malware|trojan|spyware|worm|rootkit|infostealer|вирус|троян)\b/i, kind: 'вирус', sev: 'medium' },
+  { re: /phishing|фишинг|credential (theft|stuffing)|scam\b/i, kind: 'фишинг', sev: 'medium' }
+];
+let threatIntel = load('threats', []);
+const seenThreat = new Set(threatIntel.map(t => t.key));
+function scanThreat(a, p) {
+  const hay = (p.title + ' ' + p.text).slice(0, defense.mode === 'mobilized' ? 3500 : 1800); // при мобилизации смотрят тщательнее
+  for (const rule of THREAT_RULES) {
+    const m = hay.match(rule.re); if (!m) continue;
+    const key = rule.kind + ':' + String(m[0]).toLowerCase();
+    if (seenThreat.has(key)) return null;
+    seenThreat.add(key);
+    const t = { id: crypto.randomUUID().slice(0, 8), ts: Date.now(), key, kind: rule.kind, sev: rule.sev, match: String(m[0]).slice(0, 60), title: p.title.slice(0, 120), url: p.url, host: p.host.replace(/^www\./, ''), by: a.name };
+    threatIntel.push(t); if (threatIntel.length > 300) { const g = threatIntel.shift(); seenThreat.delete(g.key); }
+    push('intel', t); persist();
+    say(a, rule.sev === 'critical' ? 'alert' : 'finding', `Угроза [${rule.kind}] ${t.match} — «${t.title}» · ${t.host}`, { url: p.url });
+    noteThreatFound(t);
+    return t;
+  }
+  return null;
+}
+
+// ---------- режим мобилизации: весь отряд бросается на одну угрозу, максимум обороны ----------
+const defense = { mode: 'calm', topic: '', since: 0, until: 0, hits: [] };
+const defenseState = () => ({ mode: defense.mode, topic: defense.topic, remaining: Math.max(0, defense.until - Date.now()) });
+const DEFENSE_SEEDS = { CVE: 'critical CVE active exploit', '0-day': 'zero day exploit in the wild', ransomware: 'ransomware attack mitigation', botnet: 'botnet DDoS mitigation', 'сбежавший агент': 'rogue AI agent malware', утечка: 'data breach response', эксплойт: 'active exploit patch', 'supply-chain': 'supply chain attack', вирус: 'new malware removal', фишинг: 'phishing takedown' };
+function securityAgent() { return agents.find(a => a.enabled && a.permissions.includes('security.read')) || agents.find(a => a.enabled); }
+function mobilize(topic, reason) {
+  defense.mode = 'mobilized'; defense.topic = topic || 'active cyber threat'; defense.since = Date.now(); defense.until = Date.now() + 180000;
+  push('defense', defenseState());
+  const s = securityAgent(); if (s) say(s, 'alert', `МОБИЛИЗАЦИЯ. Весь отряд переключается на угрозу: ${defense.topic}.${reason ? ' ' + reason : ''}`);
+  for (const a of browsers()) { const r = rt(a); r.obs = null; r.queries = []; r.nextAt = Date.now() + Math.random() * 5000; } // сразу ищут по новой теме
+  setLock(true, false, 'Массовая угроза.');
+  log('mobilize', defense.topic, reason || '');
+}
+function standDown() {
+  if (defense.mode === 'calm') return;
+  defense.mode = 'calm'; defense.topic = ''; push('defense', defenseState());
+  const s = securityAgent(); if (s) say(s, 'info', 'Отбой мобилизации. Отряд возвращается к обычному прочёсыванию сети.');
+}
+function noteThreatFound(t) {
+  const now = Date.now(); defense.hits = defense.hits.filter(h => now - h.ts < 120000); defense.hits.push({ ts: now, kind: t.kind, sev: t.sev });
+  const serious = defense.hits.filter(h => h.sev === 'critical' || h.sev === 'high');
+  if (defense.mode === 'calm' && serious.length >= 5) {
+    const counts = {}; serious.forEach(h => counts[h.kind] = (counts[h.kind] || 0) + 1);
+    const hot = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+    mobilize(DEFENSE_SEEDS[hot] || hot, `Найдено ${serious.length} серьёзных угроз за 2 минуты.`);
+  } else if (defense.mode === 'mobilized') defense.until = now + 180000;
+}
+setInterval(() => { if (defense.mode === 'mobilized' && Date.now() > defense.until) standDown(); }, 5000);
 // Sentinel поднимает тревогу в общем чате и зовёт на подмогу агентов по кибербезопасности
 let lastAlert = 0;
 function sentinelAlert(ev) {
@@ -566,7 +631,7 @@ const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'applicat
 const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
-  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot() });
+  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80) });
 const pushAgents = () => push('agents', agents.map(pub));
 
 async function api(req, res, url) {
@@ -652,9 +717,20 @@ async function api(req, res, url) {
   }
   if (url === '/api/bans' && req.method === 'DELETE') { const b = await body(req); delete bans[b.ip]; persist(); push('bans', bans); return json(res, 200, bans); }
   if (url === '/api/simulate' && req.method === 'POST') {
-    const fake = '203.0.113.' + (1 + Math.floor(Math.random() * 250));
-    const k = rnd([['honeypot', 'high', 'Ловушка /wp-login.php · python-requests'], ['attack', 'critical', "Подозрительный запрос: /?id=1' or 1=1 · sqlmap"], ['flood', 'medium', '240 запросов за 10 сек']]);
+    const b = await body(req);
+    const kinds = [['honeypot', 'high', 'Ловушка /wp-login.php · python-requests'], ['attack', 'critical', "Подозрительный запрос: /?id=1' or 1=1 · sqlmap"], ['flood', 'medium', '240 запросов за 10 сек']];
+    if (b.swarm) { // атака «своры»: скоординированный залп с кучи IP одной подсети — проверка обороны
+      const net = '198.51.100.', n = 12 + Math.floor(Math.random() * 8);
+      for (let i = 0; i < n; i++) { const ip = net + (1 + Math.floor(Math.random() * 250)); const k = rnd(kinds); logEvent({ kind: k[0], severity: k[1], ip, detail: k[2] + ' [имитация своры]' }); ban(ip, k[2], 'sim'); }
+      return json(res, 200, { swarm: n });
+    }
+    const fake = '203.0.113.' + (1 + Math.floor(Math.random() * 250)); const k = rnd(kinds);
     logEvent({ kind: k[0], severity: k[1], ip: fake, detail: k[2] + ' [имитация]' }); ban(fake, k[2], 'sim'); return json(res, 200, { ip: fake });
+  }
+  if (url === '/api/mobilize' && req.method === 'POST') {
+    const b = await body(req);
+    if (b.on === false) { standDown(); } else { mobilize(b.topic || 'active cyber threat', 'Ручная мобилизация командира.'); }
+    return json(res, 200, defenseState());
   }
   return json(res, 404, { error: 'not found' });
 }

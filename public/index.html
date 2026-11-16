@@ -127,7 +127,7 @@
           <span>Отряд · <span id="aCount">0</span></span>
           <div class="tools">
             <input class="field field--sm" id="aSearch" placeholder="Поиск" aria-label="Поиск агента">
-            <input class="field field--num" id="spawnN" type="number" min="1" max="100" value="5" aria-label="Количество">
+            <input class="field field--num" id="spawnN" type="number" min="1" max="1000" value="20" aria-label="Количество">
             <select class="field field--sm" id="spawnT" aria-label="Специализация"></select>
             <button class="btn btn--solid btn--sm" id="spawnBtn" type="button">Добавить</button>
             <button class="btn btn--ghost btn--sm" id="customBtn" type="button">Свой агент</button>
@@ -156,21 +156,29 @@
             </div>
             <div class="lockrow"><div><b>Microsoft Defender</b><span class="dim" id="defSub">Проверка статуса антивируса…</span></div>
               <button class="btn btn--ghost btn--sm" id="defBtn" type="button">Проверить</button></div>
+            <div class="lockrow" id="mobRow"><div><b id="mobTitle">Мобилизация выключена</b><span class="dim" id="mobSub">Включится сама при шквале угроз</span></div>
+              <button class="btn btn--sm btn--ghost" id="mobBtn" type="button">Мобилизовать отряд</button></div>
           </div>
           <div class="pane">
-            <div class="pane__head"><span>Вердикт Sentinel</span>
-              <div class="tools"><button class="btn btn--ghost btn--sm" id="simBtn" type="button">Имитация атаки</button><button class="btn btn--solid btn--sm" id="patrolBtn" type="button">Патруль</button></div></div>
-            <div class="pad"><p class="verdict" id="verdict">Сервер держит ловушки (/wp-login.php, /.env, /phpmyadmin…), ловит сканеры, SQL-инъекции, XSS, RCE и флуд. Источник банится сразу, Sentinel поднимает тревогу и зовёт подмогу, а при массовой атаке включается карантин.</p></div>
+            <div class="pane__head"><span>Оборона сервера</span>
+              <div class="tools"><button class="btn btn--ghost btn--sm" id="simBtn" type="button">Имитация атаки</button><button class="btn btn--ghost btn--sm" id="swarmBtn" type="button">Атака своры</button><button class="btn btn--solid btn--sm" id="patrolBtn" type="button">Патруль</button></div></div>
+            <div class="pad"><p class="verdict" id="verdict">Отряд прочёсывает интернет на реальные угрозы (вирусы, уязвимости, утечки, ботнеты, сбежавшие агенты) и докладывает находки. Сервер держит ловушки, ловит сканеры/SQLi/XSS/RCE/флуд, банит источник, а при шквале — объявляет мобилизацию и карантин.</p></div>
           </div>
           <div class="pane grow">
             <div class="pane__head"><span>Заблокированные IP</span><span class="dim" id="banCount">0</span></div>
             <div class="rows" id="banRows"></div>
           </div>
         </div>
-        <div class="pane">
-          <div class="pane__head"><span>Журнал угроз</span>
-            <div class="tools"><span class="dim" id="evCount">0</span><a class="btn btn--ghost btn--sm" id="exportBtn" href="/api/export" download>Выгрузить</a></div></div>
-          <div class="rows" id="evRows"></div>
+        <div class="sec__col">
+          <div class="pane" style="flex:1.4">
+            <div class="pane__head"><span>Найденные в сети угрозы</span><span class="dim" id="intelCount">0</span></div>
+            <div class="rows" id="intelRows"></div>
+          </div>
+          <div class="pane" style="flex:1">
+            <div class="pane__head"><span>Журнал обороны</span>
+              <div class="tools"><span class="dim" id="evCount">0</span><a class="btn btn--ghost btn--sm" id="exportBtn" href="/api/export" download>Выгрузить</a></div></div>
+            <div class="rows" id="evRows"></div>
+          </div>
         </div>
       </div>
     </section>

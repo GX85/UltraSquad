@@ -264,6 +264,19 @@ select.field option{background:#1c1c1e;color:#fff}
 .shield.locked{box-shadow:inset 0 0 0 1px rgba(255,69,58,.5),0 0 40px -10px rgba(255,69,58,.5)}
 .shield.locked #lockRow{background:rgba(255,69,58,.16)}
 .shield.locked .gauge__fg{stroke:var(--red)}
+.shield.mobilized #mobRow{background:rgba(255,69,58,.2);box-shadow:inset 0 0 0 1px rgba(255,69,58,.5)}
+.shield.mobilized{animation:mobpulse 1.6s ease-in-out infinite}
+@keyframes mobpulse{50%{box-shadow:inset 0 0 0 1px rgba(255,69,58,.6),0 0 50px -8px rgba(255,69,58,.6)}}
+.status.mobilized em{color:var(--red)}
+/* лента найденных угроз */
+.row--intel{grid-template-columns:96px minmax(0,1fr) auto;align-items:start}
+.tk{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:7px;background:var(--fill);white-space:nowrap;align-self:start}
+.tk.critical{background:rgba(255,69,58,.22);color:var(--red)}
+.tk.high{background:rgba(255,159,10,.2);color:var(--orange)}
+.tk.medium{background:rgba(255,214,10,.16);color:#ffd60a}
+.intel__t{font-size:13px;font-weight:600;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.intel__m{font:400 11px/1.5 var(--mono);color:var(--teal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.intel__src{font-size:11px;color:var(--text-3);white-space:nowrap}
 .sec{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:14px}
 .sec__col{display:flex;flex-direction:column;gap:14px;min-height:0}
 .verdict{font-size:14px;line-height:1.65;color:var(--text-2);white-space:pre-wrap}
