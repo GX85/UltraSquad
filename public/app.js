@@ -260,6 +260,10 @@ function renderShield() {
   $('#mobSub').textContent = mob ? `Тема: ${S.defense.topic || '—'} · отбой через ${Math.ceil((S.defense.remaining || 0) / 1000)} с` : 'Включится сама при шквале угроз';
   $('#mobBtn').textContent = mob ? 'Отбой' : 'Мобилизовать отряд';
   $('#mobBtn').className = 'btn btn--sm ' + (mob ? 'btn--danger' : 'btn--ghost');
+  const g = S.guard || {};
+  $('#guardSub').textContent = g.loading && !g.total ? 'Загрузка чёрного списка…'
+    : g.total ? `${(g.ips || 0).toLocaleString('ru')} IP + ${g.cidrs || 0} подсетей заблокированы превентивно · предотвращено: ${g.prevented || 0}`
+    : 'Чёрный список не загружен';
 }
 function renderIntel() {
   const list = [...(S.intel || [])].reverse();
@@ -286,6 +290,7 @@ $('#defBtn').onclick = async () => { $('#defSub').textContent = 'Читаю ст
 $('#mobBtn').onclick = async () => { const on = (S.defense || {}).mode === 'mobilized'; const r = await api('/mobilize', { method: 'POST', body: { on: !on } }); if (r.mode) { S.defense = r; renderShield(); renderStrip(); } };
 $('#simBtn').onclick = () => api('/simulate', { method: 'POST' });
 $('#swarmBtn').onclick = async () => { const r = await api('/simulate', { method: 'POST', body: { swarm: true } }); if (r.swarm) toast(`Имитация своры: ${r.swarm} источников`, true); };
+$('#guardBtn').onclick = async () => { const r = await api('/prevent-test', { method: 'POST' }); toast(r.ok ? `Превентивно заблокировано реальных вредоносных IP: ${r.blocked}` : (r.note || 'Чёрный список загружается'), r.ok); };
 $('#patrolBtn').onclick = async () => {
   const v = $('#verdict'), b = $('#patrolBtn'); b.disabled = true; v.classList.add('busy'); v.textContent = 'Sentinel читает журнал…';
   const r = await api('/patrol', { method: 'POST' });
@@ -433,6 +438,7 @@ function connect() {
   es.addEventListener('sec', e => { S.sec = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
   es.addEventListener('intel', e => { const t = JSON.parse(e.data); S.intel = S.intel || []; S.intel.push(t); if (S.intel.length > 120) S.intel.shift(); if (location.hash === '#security') renderIntel(); if (t.sev === 'critical') toast(`Угроза [${t.kind}] ${t.match}\n${t.title}`, true); });
   es.addEventListener('defense', e => { S.defense = JSON.parse(e.data); renderShield(); renderStrip(); if (S.defense.mode === 'mobilized') toast('⚔ МОБИЛИЗАЦИЯ — весь отряд на угрозе: ' + (S.defense.topic || ''), true); });
+  es.addEventListener('guard', e => { S.guard = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
   es.addEventListener('lock', e => { S.lock = JSON.parse(e.data); renderShield(); toast(S.lock.on ? '🛡 Карантин включён — внешний доступ закрыт' : 'Карантин снят', S.lock.on); });
   es.addEventListener('defender', e => { S.defender = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
   es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); if (location.hash === '#models') renderModels(); });

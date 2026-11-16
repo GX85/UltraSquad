@@ -10,6 +10,7 @@ const web = require('./lib/web');
 const camLib = require('./lib/cam');
 const { createMonitor } = require('./lib/defender');
 const intel = require('./lib/intel');
+const guardLib = require('./lib/guard');
 
 // ---------- окружение ----------
 try {
@@ -598,6 +599,30 @@ function dispatchReal() {
   // не триггерим мобилизацию: реальные KEV почти всегда critical, это фон, а не всплеск
   setTimeout(() => { if (rt(a).state === 'reading' && rt(a).target === v.url) setState(a, 'idle'); }, 6000);
 }
+
+// ---------- превентивная защита: блокируем известные вредоносные IP ДО атаки ----------
+const guard = { ips: new Set(), ranges: [], feeds: {}, total: 0, prevented: 0, at: 0, loading: false };
+const guardState = () => ({ total: guard.total, ips: guard.ips.size, cidrs: guard.ranges.length, prevented: guard.prevented, feeds: guard.feeds, at: guard.at, loading: guard.loading });
+const privateIp = ip => /^(10\.|127\.|192\.168\.|169\.254\.|0\.|::1|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+function isBad(ip) {
+  if (guard.ips.has(ip)) return true;
+  const n = guardLib.ip2int(ip); if (n == null || !guard.ranges.length) return false;
+  let lo = 0, hi = guard.ranges.length - 1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1, r = guard.ranges[mid]; if (n < r[0]) hi = mid - 1; else if (n > r[1]) lo = mid + 1; else return true; }
+  return false;
+}
+async function refreshBlocklist() {
+  if (guard.loading) return; guard.loading = true; push('guard', guardState());
+  try {
+    const g = await guardLib.fetchFeeds();
+    guard.ips = g.ips; guard.ranges = g.ranges; guard.feeds = g.counts; guard.total = g.total; guard.at = g.at;
+    log('guard', `чёрный список: ${guard.ips.size} IP + ${guard.ranges.length} подсетей`);
+    const s = securityAgent();
+    if (s) say(s, 'info', `Обновил чёрный список угроз: ${guard.ips.size} вредоносных IP + ${guard.ranges.length} подсетей (${Object.entries(guard.feeds).map(([k, v]) => k + ': ' + v).join(', ')}). Эти источники блокируются превентивно — до атаки.`);
+  } catch (e) { log('guard err', e.message); }
+  finally { guard.loading = false; push('guard', guardState()); }
+}
+
 // Sentinel поднимает тревогу в общем чате и зовёт на подмогу агентов по кибербезопасности
 let lastAlert = 0;
 function sentinelAlert(ev) {
@@ -666,7 +691,7 @@ const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'applicat
 const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
-  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus });
+  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus, guard: guardState() });
 const pushAgents = () => push('agents', agents.map(pub));
 
 async function api(req, res, url) {
@@ -762,6 +787,13 @@ async function api(req, res, url) {
     const fake = '203.0.113.' + (1 + Math.floor(Math.random() * 250)); const k = rnd(kinds);
     logEvent({ kind: k[0], severity: k[1], ip: fake, detail: k[2] + ' [имитация]' }); ban(fake, k[2], 'sim'); return json(res, 200, { ip: fake });
   }
+  if (url === '/api/prevent-test' && req.method === 'POST') { // демо превентивки: берём реальные IP из чёрного списка
+    const real = [...guard.ips].slice(0, 6);
+    if (!real.length) return json(res, 200, { ok: false, note: 'Чёрный список ещё загружается' });
+    for (const ip of real) { guard.prevented++; if (!bans[ip]) bans[ip] = { ts: Date.now(), reason: 'чёрный список угроз', by: 'guard' }; logEvent({ kind: 'prevented', severity: 'high', ip, detail: 'Превентивно заблокирован реальный вредоносный IP (demo)' }); }
+    push('bans', bans); push('guard', guardState());
+    return json(res, 200, { ok: true, blocked: real.length });
+  }
   if (url === '/api/mobilize' && req.method === 'POST') {
     const b = await body(req);
     if (b.on === false) { standDown(); } else { mobilize(b.topic || 'active cyber threat', 'Ручная мобилизация командира.'); }
@@ -783,6 +815,13 @@ const server = http.createServer(async (req, res) => {
   const ip = norm(req.socket.remoteAddress);
   const url = (req.url || '/').split('?')[0];
   const ok = trusted(req, ip);
+  // ПРЕВЕНТИВНАЯ блокировка: известный вредоносный IP не доходит даже до ловушек
+  if (!ok && !privateIp(ip) && isBad(ip)) {
+    guard.prevented++;
+    if (!bans[ip]) { bans[ip] = { ts: Date.now(), reason: 'чёрный список угроз', by: 'guard' }; if (guard.prevented % 25 === 1) logEvent({ kind: 'prevented', severity: 'high', ip, detail: 'Превентивно заблокирован: IP в чёрном списке (abuse.ch/blocklist.de/FireHOL)' }); }
+    if (guard.prevented % 10 === 0) push('guard', guardState());
+    res.writeHead(403); return res.end('blocked');
+  }
   if (bans[ip] && !ok) { res.writeHead(403); return res.end('banned'); }
   if (lock.on && !ok) { res.writeHead(503, { 'Retry-After': '120', 'Content-Type': 'text/plain' }); return res.end('Service temporarily unavailable'); }
   const trap = HONEYPOTS.some(h => url.toLowerCase().startsWith(h));
@@ -810,7 +849,8 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { log('http', url, e.message); if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
 });
 server.on('error', e => { if (e.code === 'EADDRINUSE') { log(`Порт ${PORT} занят — UltraSquad уже запущен. Выход.`); process.exit(0); } log('server', e); process.exit(1); });
-server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); refreshIntel(); });
+server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); refreshIntel(); refreshBlocklist(); });
+setInterval(refreshBlocklist, 10800000);            // обновлять чёрный список вредоносных IP раз в 3 часа
 setInterval(refreshIntel, 1800000);                 // обновлять реальные фиды раз в 30 мин
 setInterval(dispatchReal, 11000);                   // раздавать реальную угрозу агенту каждые ~11 сек
 setInterval(refreshKey, 3600000);
