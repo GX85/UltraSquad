@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const web = require('./lib/web');
 const camLib = require('./lib/cam');
 const { createMonitor } = require('./lib/defender');
+const intel = require('./lib/intel');
 
 // ---------- окружение ----------
 try {
@@ -504,17 +505,15 @@ const defender = createMonitor((status, changed) => {
 });
 
 // ---------- охота за реальными угрозами: агенты распознают их на реальных страницах ----------
+// Высокосигнальные паттерны — только конкретика (ид CVE, активная эксплуатация, конкретные атаки),
+// без общих слов вроде «malware», чтобы не ловить мусор на энциклопедиях. Реальные CVE идут из lib/intel.
 const THREAT_RULES = [
-  { re: /zero[-\s]?day|\b0-?day\b/i, kind: '0-day', sev: 'critical' },
   { re: /\bCVE-\d{4}-\d{3,7}\b/i, kind: 'CVE', sev: 'high' },
-  { re: /ransomware|вымогател|шифровальщик/i, kind: 'ransomware', sev: 'critical' },
-  { re: /\b(botnet|ботнет)\b/i, kind: 'botnet', sev: 'high' },
-  { re: /rogue\s+(ai\s+)?agent|autonomous malware|malicious (ai\s+)?agent|сбежавш\w*\s+агент|prompt injection/i, kind: 'сбежавший агент', sev: 'high' },
-  { re: /data breach|утечк\w*\s+данн|leaked database|credential (leak|dump)/i, kind: 'утечка', sev: 'high' },
-  { re: /\b(remote code execution|\bRCE\b|privilege escalation|exploit(ed|ation)? in the wild)\b/i, kind: 'эксплойт', sev: 'high' },
-  { re: /supply[-\s]chain (attack|compromise)/i, kind: 'supply-chain', sev: 'high' },
-  { re: /\b(malware|trojan|spyware|worm|rootkit|infostealer|вирус|троян)\b/i, kind: 'вирус', sev: 'medium' },
-  { re: /phishing|фишинг|credential (theft|stuffing)|scam\b/i, kind: 'фишинг', sev: 'medium' }
+  { re: /zero[-\s]?day|\b0-?day\b/i, kind: '0-day', sev: 'critical' },
+  { re: /exploit(ed|ation)? in the wild|actively exploited|proof[-\s]of[-\s]concept exploit/i, kind: 'эксплойт', sev: 'high' },
+  { re: /rogue\s+(ai\s+)?agent|autonomous malware|malicious (ai\s+)?agent|сбежавш\w*\s+агент|prompt[-\s]injection/i, kind: 'сбежавший агент', sev: 'high' },
+  { re: /supply[-\s]chain (attack|compromise)|typosquatt|backdoor(ed)? package/i, kind: 'supply-chain', sev: 'high' },
+  { re: /data breach|утечк\w*\s+данн|leaked (database|credentials)|credential (leak|dump|stuffing)/i, kind: 'утечка', sev: 'high' }
 ];
 let threatIntel = load('threats', []);
 const seenThreat = new Set(threatIntel.map(t => t.key));
@@ -563,6 +562,38 @@ function noteThreatFound(t) {
   } else if (defense.mode === 'mobilized') defense.until = now + 180000;
 }
 setInterval(() => { if (defense.mode === 'mobilized' && Date.now() > defense.until) standDown(); }, 5000);
+
+// ---------- реальная лента угроз из CISA KEV и NVD (не выдумка — официальные фиды) ----------
+const realPool = []; const seenReal = new Set(threatIntel.filter(t => t.real).map(t => t.match));
+let intelStatus = { ok: false, kev: 0, nvd: 0, at: 0, error: '' };
+async function refreshIntel() {
+  try {
+    const [kev, nvd] = await Promise.allSettled([intel.cisaKev(60), intel.nvdRecent(4, 40)]);
+    const list = [...(kev.status === 'fulfilled' ? kev.value : []), ...(nvd.status === 'fulfilled' ? nvd.value : [])];
+    let added = 0;
+    for (const v of list) { if (!v.cve || seenReal.has(v.cve)) continue; seenReal.add(v.cve); realPool.push(v); added++; }
+    intelStatus = { ok: list.length > 0, kev: kev.status === 'fulfilled' ? kev.value.length : 0, nvd: nvd.status === 'fulfilled' ? nvd.value.length : 0, at: Date.now(), error: kev.reason?.message || nvd.reason?.message || '' };
+    if (seenReal.size > 2000) seenReal.clear();
+    log('intel', `KEV=${intelStatus.kev} NVD=${intelStatus.nvd} новых=${added} очередь=${realPool.length}`);
+  } catch (e) { intelStatus = { ...intelStatus, ok: false, error: e.message, at: Date.now() }; log('intel err', e.message); }
+}
+// Раздаём реальные угрозы агентам: агент «читает» страницу уязвимости (видно в эфире) и докладывает
+function dispatchReal() {
+  if (!settings.running || !realPool.length) return;
+  const hunters = browsers(); if (!hunters.length) return;
+  const v = realPool.shift(); const a = rnd(hunters);
+  const key = v.cve, sev = v.ransomware ? 'critical' : v.sev || 'high';
+  if (threatIntel.some(t => t.match === key)) return;
+  const t = { id: crypto.randomUUID().slice(0, 8), ts: Date.now(), key, real: true, source: v.source, kind: v.kind, sev,
+    match: v.cve, title: v.title, desc: v.desc, url: v.url, host: 'nvd.nist.gov', by: a.name, date: v.date, ransomware: !!v.ransomware };
+  threatIntel.push(t); if (threatIntel.length > 300) threatIntel.shift();
+  a.steps++; push('intel', t); persist();
+  setState(a, 'reading', v.url);
+  live(a, 'page', { url: v.url, host: 'nvd.nist.gov', title: v.cve + ' · ' + v.title, text: `${v.source} · ${v.kind}${v.ransomware ? ' · используется вымогателями' : ''}\n${v.desc}`, links: [] });
+  say(a, sev === 'critical' ? 'alert' : 'finding', `${v.source}: ${v.cve} [${sev}]${v.ransomware ? ' ⚠ ransomware' : ''} — ${v.title}`, { url: v.url });
+  // не триггерим мобилизацию: реальные KEV почти всегда critical, это фон, а не всплеск
+  setTimeout(() => { if (rt(a).state === 'reading' && rt(a).target === v.url) setState(a, 'idle'); }, 6000);
+}
 // Sentinel поднимает тревогу в общем чате и зовёт на подмогу агентов по кибербезопасности
 let lastAlert = 0;
 function sentinelAlert(ev) {
@@ -631,7 +662,7 @@ const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'applicat
 const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
-  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80) });
+  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus });
 const pushAgents = () => push('agents', agents.map(pub));
 
 async function api(req, res, url) {
@@ -758,7 +789,9 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { log('http', url, e.message); if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
 });
 server.on('error', e => { if (e.code === 'EADDRINUSE') { log(`Порт ${PORT} занят — UltraSquad уже запущен. Выход.`); process.exit(0); } log('server', e); process.exit(1); });
-server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); });
+server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); refreshIntel(); });
+setInterval(refreshIntel, 1800000);                 // обновлять реальные фиды раз в 30 мин
+setInterval(dispatchReal, 11000);                   // раздавать реальную угрозу агенту каждые ~11 сек
 setInterval(refreshKey, 3600000);
 setInterval(() => { if (settings.brain === 'ollama') ollamaUp(); }, 30000);
 setInterval(() => { defender.refresh().catch(() => {}); }, 600000); // проверка Defender раз в 10 минут

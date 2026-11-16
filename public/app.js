@@ -264,7 +264,12 @@ function renderShield() {
 function renderIntel() {
   const list = [...(S.intel || [])].reverse();
   $('#intelCount').textContent = list.length;
-  $('#intelRows').innerHTML = list.map(t => `<div class="row row--intel"><span class="tk ${esc(t.sev)}">${esc(t.kind)}</span><div><div class="intel__t">${esc(t.title)}</div><div class="intel__m">${esc(t.match)} · ${esc(t.host)}</div></div><a class="link intel__src" href="${esc(/^https?:\/\//.test(t.url) ? t.url : '#')}" target="_blank" rel="noopener noreferrer">${esc(t.by)}</a></div>`).join('') || '<p class="empty">Отряд прочёсывает сеть… реальные угрозы появятся здесь.</p>';
+  $('#intelRows').innerHTML = list.map(t => {
+    const tag = t.real ? (t.source || 'CVE') : t.kind;
+    const meta = [t.match, t.date, t.ransomware ? '⚠ ransomware' : '', t.host].filter(Boolean).join(' · ');
+    const href = /^https?:\/\//.test(t.url) ? t.url : '#';
+    return `<div class="row row--intel"><span class="tk ${esc(t.sev)}">${esc(tag)}</span><div><div class="intel__t">${esc(t.title)}</div><div class="intel__m">${esc(meta)}</div></div><a class="link intel__src" href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(t.by || '')}">${esc(t.by || 'открыть')}</a></div>`;
+  }).join('') || '<p class="empty">Отряд подтягивает реальные угрозы из CISA KEV и NVD…</p>';
 }
 function renderSecurity() {
   const ev = [...S.events].reverse();

@@ -1,16 +1,36 @@
 ﻿# UltraSquad
 
-Локальный сервер автономных ИИ-агентов с прямой трансляцией.
+Локальный сервер автономных ИИ-агентов — охотников за киберугрозами, с прямой трансляцией.
 
-- До 100 агентов ходят по реальному интернету (поиск + чтение страниц), эфир и граф сети в реальном времени
-- Только бесплатные модели OpenRouter (`:free`); платные заблокированы в коде
-- Ловушки и сигнатуры атак, агент Sentinel банит атакующих
+- До **1000 агентов** ходят по реальному интернету; эфир (видео), граф сети и чат отряда в реальном времени
+- **Реальная разведка угроз:** агенты подтягивают настоящие активно эксплуатируемые уязвимости из **CISA KEV** и свежие **CVE из NVD** (не имитация), камера показывает реальную страницу уязвимости
+- **Оборона своего сервера:** ловушки, сигнатуры (SQLi/XSS/RCE/Log4Shell/сканеры), авто-бан, щит, **карантин** и режим **мобилизации** (весь отряд на одну угрозу)
+- Мозг: бесплатные модели OpenRouter (`:free`, по умолчанию) · Ollama · Claude; платные заблокированы в коде
 - Без внешних зависимостей, только Node.js 18+
 
 ## Запуск
-1. `copy .env.example .env` и впиши ключ OpenRouter
+1. `copy .env.example .env` и впиши ключ OpenRouter (Ollama по желанию)
 2. `node server.js` → http://127.0.0.1:7777
 3. Автозапуск с Windows: `powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1`
+
+## Управление из приложения Claude (MCP)
+
+`mcp/ultrasquad-mcp.mjs` — MCP-сервер: Claude Desktop подключает его как инструмент, и ты прямо в чате говоришь «покажи угрозы», «мобилизуй отряд», «поставь задачу». Работает, пока запущен UltraSquad на этом же компьютере.
+
+Добавь в `claude_desktop_config.json` (Claude → Settings → Developer → Edit Config):
+
+```json
+{
+  "mcpServers": {
+    "ultrasquad": {
+      "command": "node",
+      "args": ["C:\\Users\\Solo Developer\\UltraSquad\\mcp\\ultrasquad-mcp.mjs"]
+    }
+  }
+}
+```
+
+Перезапусти Claude Desktop. Инструменты: `ultrasquad_status`, `ultrasquad_threats`, `ultrasquad_mobilize`, `ultrasquad_lockdown`, `ultrasquad_patrol`, `ultrasquad_spawn`, `ultrasquad_task`, `ultrasquad_pause`, `ultrasquad_resume`. Управление с телефона (мобильный Claude) заработает только если поднять UltraSquad на облачном сервере с публичным адресом и указать его в `ULTRASQUAD_URL`.
 
 ## Защита на Windows
 
