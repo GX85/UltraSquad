@@ -175,9 +175,9 @@ function renderAgents() {
   const q = $('#aSearch').value.trim().toLowerCase();
   const list = S.agents.filter(a => !q || (a.name + a.role + a.mission).toLowerCase().includes(q));
   $('#aCount').textContent = `${S.agents.length} из ${S.max}`;
-  $('#agentRows').innerHTML = list.map(a => `<div class="row row--agent ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
+  $('#agentRows').innerHTML = list.map(a => `<div class="row row--agent team-${a.team || 'blue'} ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
     <span class="st ${a.enabled && a.state !== 'idle' ? 'busy' : ''}" data-st>${a.enabled ? ST[a.state] || a.state : 'выключен'}</span>
-    <b class="cut">${esc(a.name)}</b><span class="dim cut h-md">${esc(a.role)}</span><span class="cut h-sm">${esc(a.mission)}</span>
+    <b class="cut">${(a.team === 'red' ? '🔴 ' : '')}${esc(a.name)}</b><span class="dim cut h-md">${esc(a.role)}</span><span class="cut h-sm">${esc(a.mission)}</span>
     <span class="mono dim cut h-md">${esc(a.model === 'auto' ? 'авто · free' : a.model.replace(':free', ''))}</span><span class="mono h-md" data-steps>${a.steps || 0}</span>
     <span class="acts"><button class="link" data-act="watch" type="button">Эфир</button><button class="link" data-act="chat" type="button">Чат</button><button class="link" data-act="edit" type="button">Настроить</button><button class="link" data-act="toggle" type="button">${a.enabled ? 'Выкл' : 'Вкл'}</button></span></div>`).join('')
     || '<p class="empty">Никого не найдено.</p>';
@@ -264,6 +264,12 @@ function renderShield() {
   $('#guardSub').textContent = g.loading && !g.total ? 'Загрузка чёрного списка…'
     : g.total ? `${(g.ips || 0).toLocaleString('ru')} IP + ${g.cidrs || 0} подсетей заблокированы превентивно · предотвращено: ${g.prevented || 0}`
     : 'Чёрный список не загружен';
+  const dr = S.drill || {};
+  $('#drillRow').classList.toggle('on', !!dr.on);
+  $('#drillTitle').textContent = dr.on ? `⚔ Учения идут · ${dr.red} красных` : '⚔ Учения: красные / синие';
+  $('#drillSub').textContent = dr.on ? `Атак: ${dr.launched} · отбито: ${dr.blocked} · прорвалось и поймано: ${dr.breached}` : 'Красные атакуют сервер, синие отбивают';
+  $('#drillBtn').textContent = dr.on ? 'Стоп' : 'Начать учения';
+  $('#drillBtn').className = 'btn btn--sm ' + (dr.on ? 'btn--danger' : 'btn--ghost');
 }
 function renderIntel() {
   const list = [...(S.intel || [])].reverse();
@@ -291,6 +297,7 @@ $('#mobBtn').onclick = async () => { const on = (S.defense || {}).mode === 'mobi
 $('#simBtn').onclick = () => api('/simulate', { method: 'POST' });
 $('#swarmBtn').onclick = async () => { const r = await api('/simulate', { method: 'POST', body: { swarm: true } }); if (r.swarm) toast(`Имитация своры: ${r.swarm} источников`, true); };
 $('#guardBtn').onclick = async () => { const r = await api('/prevent-test', { method: 'POST' }); toast(r.ok ? `Превентивно заблокировано реальных вредоносных IP: ${r.blocked}` : (r.note || 'Чёрный список загружается'), r.ok); };
+$('#drillBtn').onclick = async () => { const on = !(S.drill || {}).on; const r = await api('/drill', { method: 'POST', body: { on, intensity: 3 } }); if (r) { S.drill = r; renderShield(); toast(on ? '⚔ Учения начаты: красные атакуют, синие отбивают' : 'Учения завершены', true); } };
 $('#patrolBtn').onclick = async () => {
   const v = $('#verdict'), b = $('#patrolBtn'); b.disabled = true; v.classList.add('busy'); v.textContent = 'Sentinel читает журнал…';
   const r = await api('/patrol', { method: 'POST' });
@@ -439,6 +446,7 @@ function connect() {
   es.addEventListener('intel', e => { const t = JSON.parse(e.data); S.intel = S.intel || []; S.intel.push(t); if (S.intel.length > 120) S.intel.shift(); if (location.hash === '#security') renderIntel(); if (t.sev === 'critical') toast(`Угроза [${t.kind}] ${t.match}\n${t.title}`, true); });
   es.addEventListener('defense', e => { S.defense = JSON.parse(e.data); renderShield(); renderStrip(); if (S.defense.mode === 'mobilized') toast('⚔ МОБИЛИЗАЦИЯ — весь отряд на угрозе: ' + (S.defense.topic || ''), true); });
   es.addEventListener('guard', e => { S.guard = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
+  es.addEventListener('drill', e => { S.drill = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
   es.addEventListener('lock', e => { S.lock = JSON.parse(e.data); renderShield(); toast(S.lock.on ? '🛡 Карантин включён — внешний доступ закрыт' : 'Карантин снят', S.lock.on); });
   es.addEventListener('defender', e => { S.defender = JSON.parse(e.data); if (location.hash === '#security') renderShield(); });
   es.addEventListener('quota', e => { S.quota = JSON.parse(e.data); renderStrip(); if (location.hash === '#models') renderModels(); });
