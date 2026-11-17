@@ -74,11 +74,13 @@ let events = load('events', []);
 let bans = load('bans', {});
 let stats = { day: '', used: 0, cap: 50, exhausted: false, freeTier: true, ...load('stats', {}) };
 
-function makeAgent(tpl, i) {
+function nextAgentName() {
   const used = new Set(agents ? agents.map(a => a.name) : []);
-  let name; for (let k = 0; k < 500; k++) { name = `${NAMES[(i + k) % NAMES.length]}-${String(1 + Math.floor((i + k) / NAMES.length)).padStart(2, '0')}`; if (!used.has(name)) break; }
-  return { id: crypto.randomUUID().slice(0, 8), name, role: tpl.role, mission: tpl.mission, seeds: tpl.seeds, model: 'auto', enabled: true,
-    permissions: ['web.browse'], prompt: '', notes: [], steps: 0, created: Date.now() };
+  for (let n = 1; ; n++) { const name = 'Agent' + String(n).padStart(2, '0'); if (!used.has(name)) return name; }
+}
+function makeAgent(tpl) {
+  return { id: crypto.randomUUID().slice(0, 8), name: nextAgentName(), role: tpl.role, mission: tpl.mission, seeds: tpl.seeds, model: 'auto', enabled: true,
+    team: 'red', permissions: Object.keys(PERMS), prompt: '', notes: [], steps: 0, created: Date.now() };
 }
 if (!agents || !agents.length || !agents[0].mission) { // первая установка или старый формат
   agents = [];
@@ -173,7 +175,7 @@ function rt(a) {
   return r;
 }
 function setState(a, state, target = '') { const r = rt(a); r.state = state; r.target = target; push('astate', { id: a.id, state, target }); }
-const pub = a => ({ ...a, seeds: undefined, state: rt(a).state, target: rt(a).target, team: redTeam.has(a.id) ? 'red' : 'blue' });
+const pub = a => ({ ...a, seeds: undefined, state: rt(a).state, target: rt(a).target, team: a.id === 'sentinel' ? 'blue' : (a.team || 'blue') });
 
 // ---------- OpenRouter: ТОЛЬКО бесплатные модели ----------
 const utcDay = () => new Date().toISOString().slice(0, 10);
@@ -224,7 +226,7 @@ async function chatFree(pref, messages, { max_tokens = 350, temperature = 0.6 } 
   if (!list.length) throw new Error('Нет доступных бесплатных моделей');
   const ok = id => !(badModel.get(id) > Date.now());
   const order = []; if (pref && pref !== 'auto' && list.includes(pref) && ok(pref)) order.push(pref);
-  const top = list.filter(ok).slice(0, 12); for (let i = 0; i < top.length; i++) { const id = top[(rl.rot + i) % top.length]; if (!order.includes(id)) order.push(id); }
+  const top = list.filter(ok).slice(0, 6); for (let i = 0; i < top.length; i++) { const id = top[(rl.rot + i) % top.length]; if (!order.includes(id)) order.push(id); } // только лучшие бесплатные модели (по контексту)
   rl.rot++;
   let last = new Error('Модели недоступны');
   for (const model of order.slice(0, 3)) {
@@ -468,8 +470,9 @@ function logEvent(ev) {
   ev = { id: crypto.randomUUID().slice(0, 8), ts: Date.now(), ...ev };
   events.push(ev); if (events.length > 2000) events.shift();
   persist(); push('threat', ev);
-  if (ev.kind !== 'ban') { sentinelAlert(ev); if (/high|critical/.test(ev.severity)) noteAttack(); }
-  if (ev.kind !== 'ban' && /high|critical/.test(ev.severity) && !patrolTimer) patrolTimer = setTimeout(() => { patrolTimer = null; patrol().catch(e => log('patrol', e.message)); }, 30000);
+  const incoming = !['ban', 'blocked', 'prevented'].includes(ev.kind); // защитные действия — не входящие атаки
+  if (incoming) { sentinelAlert(ev); if (/high|critical/.test(ev.severity)) noteAttack(); }
+  if (incoming && /high|critical/.test(ev.severity) && !patrolTimer) patrolTimer = setTimeout(() => { patrolTimer = null; patrol().catch(e => log('patrol', e.message)); }, 30000);
   return ev;
 }
 
@@ -486,12 +489,14 @@ function setLock(on, manual, reason) {
     ? `Карантин включён — сервер под атакой, внешний доступ временно закрыт.${reason ? ' ' + reason : ''} Локальная работа продолжается.`
     : `Карантин снят${manual ? ' вручную' : ''} — внешний доступ восстановлен.`);
   log('lockdown', on ? 'ON ' + (reason || '') : 'OFF');
+  applyTeams();
 }
 function noteAttack() {
   const now = Date.now(); lock.hits = lock.hits.filter(t => now - t < lock.window); lock.hits.push(now);
   if (!lock.on && lock.hits.length >= lock.threshold) setLock(true, false, `${lock.hits.length} атак за минуту.`);
   else if (lock.on && !lock.manual) lock.until = now + lock.hold;
   if (lock.hits.length >= 15 && defense.mode === 'calm') mobilize('DDoS botnet mitigation', `Массовая атака: ${lock.hits.length} за минуту.`); // свора → полная мобилизация
+  checkCombat();
 }
 setInterval(() => { if (lock.on && !lock.manual && Date.now() > lock.until) setLock(false, false); }, 5000);
 
@@ -641,10 +646,8 @@ function ban(ip, reason, by = 'auto') {
   push('bans', bans); return true;
 }
 
-// ---------- УЧЕНИЯ: красные атакуют свой сервер, синие отбивают (всё по своему серверу, не по чужим) ----------
-const redTeam = new Set();
-const drill = { on: false, intensity: 3, launched: 0, blocked: 0, breached: 0, timer: null, since: 0 };
-const drillState = () => ({ on: drill.on, intensity: drill.intensity, launched: drill.launched, blocked: drill.blocked, breached: drill.breached, red: redTeam.size });
+// ---------- Команды и режимы. Красные — охотники (блокируют вирусные серверы и сбежавших агентов),
+// синие — стражи. При атаке все в защите. В крайнем случае — боевой режим (жёсткая ОБОРОНА, без hack-back).
 const TECHNIQUES = [
   { t: 'SQL-инъекция', payload: "/?id=1' OR 1=1--", sev: 'critical' },
   { t: 'XSS', payload: '/search?q=<script>alert(1)</script>', sev: 'high' },
@@ -654,50 +657,91 @@ const TECHNIQUES = [
   { t: 'Брутфорс', payload: '/wp-login.php', sev: 'high' },
   { t: 'Сканер', payload: '/.env', sev: 'high' }
 ];
-function assignTeams(share = 0.25) {
-  redTeam.clear();
-  const pool = agents.filter(a => a.enabled && a.id !== 'sentinel' && a.permissions.includes('web.browse'));
-  const n = Math.max(1, Math.round(pool.length * share));
-  for (const a of pool.slice().sort(() => Math.random() - 0.5).slice(0, n)) redTeam.add(a.id);
+const drill = { on: false, intensity: 3, launched: 0, blocked: 0, breached: 0, timer: null };
+let combat = false, calmSince = Date.now(), lastPosture = '';
+function posture() { if (combat) return 'combat'; if (lock.on || defense.mode === 'mobilized' || drill.on) return 'defense'; return 'calm'; }
+const teamState = () => ({ mode: posture(), combat, red: agents.filter(a => a.enabled && a.team === 'red' && a.id !== 'sentinel').length,
+  blue: agents.filter(a => a.enabled && (a.team !== 'red' || a.id === 'sentinel')).length,
+  drill: { on: drill.on, launched: drill.launched, blocked: drill.blocked, breached: drill.breached } });
+function applyTeams() {
+  const p = posture(); let changed = false;
+  if (p === 'calm' && lastPosture !== 'calm') calmSince = Date.now();
+  lastPosture = p;
+  const hunters = agents.filter(a => a.id !== 'sentinel');
+  if (p !== 'calm') { for (const a of agents) if (a.team !== 'blue') { a.team = 'blue'; changed = true; } } // защита/бой — все синие
+  else {
+    const redShare = Math.min(0.85, 0.55 + (Date.now() - calmSince) / 600000 * 0.3); // чем дольше тишина, тем больше охотников
+    const n = Math.round(hunters.length * redShare);
+    hunters.slice().sort((a, b) => a.id < b.id ? -1 : 1).forEach((a, i) => { const t = i < n ? 'red' : 'blue'; if (a.team !== t) { a.team = t; changed = true; } });
+    const sen = agents.find(a => a.id === 'sentinel'); if (sen && sen.team !== 'blue') { sen.team = 'blue'; changed = true; }
+  }
+  if (changed) pushAgents();
 }
+// Красные блокируют реальные вирусные серверы (C2) и изолируют сбежавших агентов
+function redTick() {
+  if (posture() !== 'calm' || !settings.running) return;
+  const reds = agents.filter(a => a.enabled && a.team === 'red'); if (!reds.length) return;
+  const a = rnd(reds);
+  const rogue = threatIntel.filter(t => /сбежавш|rogue|prompt/i.test((t.kind || '') + (t.title || '')) && !t.neutralized);
+  if (rogue.length && Math.random() < 0.4) {
+    const t = rnd(rogue); t.neutralized = true;
+    setState(a, 'блокирует', t.match || t.title);
+    say(a, 'finding', `🔴 ${a.name} изолировал сбежавшего агента: ${(t.match || t.title || '').slice(0, 60)} (${t.host}).`, { url: t.url });
+  } else if (guard.ips.size) {
+    const pool = [...guard.ips].slice(0, 800); const ip = pool[Math.floor(Math.random() * pool.length)];
+    if (ip && !bans[ip]) {
+      bans[ip] = { ts: Date.now(), reason: 'вирусный сервер (C2)', by: 'red' }; guard.prevented++;
+      setState(a, 'блокирует', ip);
+      if (Math.random() < 0.5) say(a, 'finding', `🔴 ${a.name} заблокировал вирусный сервер ${ip} (C2 из abuse.ch/blocklist.de).`, { ip });
+      logEvent({ kind: 'blocked', severity: 'medium', ip, detail: 'Красный агент заблокировал вирусный сервер (C2)' });
+      push('bans', bans);
+    }
+  }
+  setTimeout(() => { if (rt(a).state === 'блокирует') setState(a, 'idle'); }, 2500);
+}
+// Учения: имитация атаки на свой сервер → все в обороне
 function drillTick() {
   if (!drill.on) return;
-  const reds = agents.filter(a => a.enabled && redTeam.has(a.id));
-  const blues = agents.filter(a => a.enabled && !redTeam.has(a.id) && a.permissions.includes('security.read'))
-    .concat(agents.filter(a => a.enabled && !redTeam.has(a.id)));
-  if (!reds.length || !blues.length) return;
-  const red = rnd(reds), tech = rnd(TECHNIQUES), ip = '100.64.' + (1 + Math.floor(Math.random() * 250)) + '.' + (1 + Math.floor(Math.random() * 250));
+  const tech = rnd(TECHNIQUES), ip = '100.64.' + (1 + Math.floor(Math.random() * 250)) + '.' + (1 + Math.floor(Math.random() * 250));
   drill.launched++;
-  setState(red, 'атакует', tech.t);
   logEvent({ kind: 'attack', severity: tech.sev, ip, detail: `${tech.t}: ${tech.payload} [учения]` });
-  const stealth = Math.random() < 0.12; // иногда скрытная атака — ловят не сразу
-  const react = () => {
-    const blue = rnd(blues);
-    setState(blue, 'защищает', ip);
-    ban(ip, `${tech.t} отбита (учения)`, 'sim');
-    drill.blocked++;
-    if (drill.launched % 6 === 0 || tech.sev === 'critical') say(blue, 'alert', `Отбил ${tech.t} от ${ip}${stealth ? ' (прошла сквозь, поймал на втором рубеже)' : ''}.`, { ip });
-    push('drill', drillState());
+  const blues = agents.filter(a => a.enabled); if (!blues.length) return;
+  const stealth = Math.random() < 0.12; if (stealth) drill.breached++;
+  setTimeout(() => {
+    const blue = rnd(blues); setState(blue, 'защищает', ip); ban(ip, `${tech.t} отбита (учения)`, 'sim'); drill.blocked++;
+    if (tech.sev === 'critical' || drill.launched % 6 === 0) say(blue, 'alert', `🔵 ${blue.name} отбил ${tech.t} от ${ip}${stealth ? ' (поймал на втором рубеже)' : ''}.`, { ip });
+    push('drill', teamState());
     setTimeout(() => { if (rt(blue).state === 'защищает') setState(blue, 'idle'); }, 2500);
-  };
-  if (stealth) { drill.breached++; setTimeout(react, 1800 + Math.random() * 2000); } else setTimeout(react, 300 + Math.random() * 900);
-  setTimeout(() => { if (rt(red).state === 'атакует') setState(red, 'idle'); }, 2000);
-  push('drill', drillState());
+  }, stealth ? 1800 + Math.random() * 1800 : 300 + Math.random() * 800);
+  push('drill', teamState());
 }
 function setDrill(on, intensity) {
-  drill.on = !!on;
-  if (intensity) drill.intensity = Math.min(5, Math.max(1, Math.round(+intensity) || 3));
+  drill.on = !!on; if (intensity) drill.intensity = Math.min(5, Math.max(1, Math.round(+intensity) || 3));
   clearInterval(drill.timer); drill.timer = null;
-  if (drill.on) {
-    assignTeams(); drill.since = Date.now();
-    const period = Math.max(600, 3200 - drill.intensity * 500);
-    drill.timer = setInterval(drillTick, period);
-    const s = securityAgent(); if (s) say(s, 'alert', `Учения начаты: ${redTeam.size} красных атакуют сервер, остальные держат оборону. Интенсивность ${drill.intensity}/5.`);
-  } else {
-    redTeam.clear();
-    const s = securityAgent(); if (s) say(s, 'info', `Учения завершены. Запущено атак: ${drill.launched}, отбито: ${drill.blocked}. Сервер устоял.`);
-  }
-  pushAgents(); push('drill', drillState());
+  if (drill.on) { drill.timer = setInterval(drillTick, Math.max(600, 3200 - drill.intensity * 500)); const s = securityAgent(); if (s) say(s, 'alert', `Учения: имитация атаки на сервер, весь отряд в обороне. Интенсивность ${drill.intensity}/5.`); }
+  else { const s = securityAgent(); if (s) say(s, 'info', `Учения завершены. Атак: ${drill.launched}, отбито: ${drill.blocked}. Сервер устоял.`); }
+  applyTeams(); push('drill', teamState());
+}
+// Боевой режим: страшная атака + поредевший отряд → максимум ОБОРОНЫ (блок подсетей, бессрочные баны). Не hack-back.
+function banSubnet(net) {
+  for (let i = 1; i < 255; i++) { const ip = net + '.' + i; if (!bans[ip]) bans[ip] = { ts: Date.now(), reason: `боевой режим: блок подсети ${net}.0/24`, by: 'combat' }; }
+  logEvent({ kind: 'blocked', severity: 'high', ip: net + '.0/24', detail: 'Боевой режим: заблокирована подсеть атакующего' }); push('bans', bans);
+}
+function enterCombat(rate, enabled, total) {
+  combat = true; setLock(true, true);
+  const s = securityAgent(); if (s) say(s, 'alert', `⚔ БОЕВОЙ РЕЖИМ. Шквал атак (${rate}/мин), в строю ${enabled}/${total}. Весь отряд в глухую оборону: блокируем подсети атакующих, баны бессрочные. Контратаку по чужим машинам не ведём — только защищаем свой сервер.`);
+  const nets = new Set();
+  for (const e of events.slice(-80)) if (/high|critical/.test(e.severity) && e.ip && !isLocal(e.ip) && net4(e.ip)) nets.add(e.ip.split('.').slice(0, 3).join('.'));
+  for (const net of [...nets].slice(0, 20)) banSubnet(net);
+  applyTeams(); push('posture', teamState());
+}
+function exitCombat() { combat = false; setLock(false, true); const s = securityAgent(); if (s) say(s, 'info', 'Отбой боевого режима. Атака отражена, сервер устоял.'); applyTeams(); push('posture', teamState()); }
+const net4 = ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip);
+function checkCombat() {
+  const now = Date.now(), rate = lock.hits.filter(t => now - t < 60000).length;
+  const enabled = agents.filter(a => a.enabled).length, total = agents.length;
+  if (!combat && rate >= 25 && (enabled < total * 0.5 || rate >= 40)) enterCombat(rate, enabled, total);
+  else if (combat && rate < 8) exitCombat();
 }
 function inspect(req, ip) {
   let url = (req.url || '').split('?')[0].toLowerCase(); try { url = decodeURIComponent(url); } catch {}
@@ -750,7 +794,7 @@ const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'applicat
 const body = req => new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
 const state = () => ({ agents: agents.map(pub), perms: PERMS, templates: TEMPLATES.map(t => ({ key: t.key, role: t.role, mission: t.mission })), live: liveBuf.slice(-120),
   events: events.slice(-150), bans, sys: sysInfo(), quota: quota(), settings, keyOk: !!OR_KEY, max: MAX_AGENTS,
-  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus, guard: guardState(), drill: drillState() });
+  chat: chatLog.slice(-150), cam: { available: cam.available, entry: air.entry, pin: air.pin }, lock: lockState(), sec: secStats(), defender: defender.snapshot(), defense: defenseState(), intel: threatIntel.slice(-80), intelStatus, guard: guardState(), drill: teamState() });
 const pushAgents = () => push('agents', agents.map(pub));
 
 async function api(req, res, url) {
@@ -858,7 +902,7 @@ async function api(req, res, url) {
     if (b.on === false) { standDown(); } else { mobilize(b.topic || 'active cyber threat', 'Ручная мобилизация командира.'); }
     return json(res, 200, defenseState());
   }
-  if (url === '/api/drill' && req.method === 'POST') { const b = await body(req); setDrill(b.on !== false, b.intensity); return json(res, 200, drillState()); }
+  if (url === '/api/drill' && req.method === 'POST') { const b = await body(req); setDrill(b.on !== false, b.intensity); return json(res, 200, teamState()); }
   return json(res, 404, { error: 'not found' });
 }
 
@@ -909,7 +953,14 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { log('http', url, e.message); if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
 });
 server.on('error', e => { if (e.code === 'EADDRINUSE') { log(`Порт ${PORT} занят — UltraSquad уже запущен. Выход.`); process.exit(0); } log('server', e); process.exit(1); });
-server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); refreshIntel(); refreshBlocklist(); });
+server.listen(PORT, HOST, () => { log(`UltraSquad запущен: http://${HOST}:${PORT} · OpenRouter: ${OR_KEY ? 'ключ найден' : 'КЛЮЧ НЕ ЗАДАН'} · агентов: ${agents.length}`); refreshKey(); freeModels().catch(e => log('models', e.message)); if (settings.brain === 'ollama') ollamaUp(); defender.refresh().catch(() => {}); refreshIntel(); refreshBlocklist(); applyTeams(); });
+setInterval(applyTeams, 12000);                     // пересчёт красные/синие по обстановке
+setInterval(redTick, 5000);                         // красные блокируют вирусные серверы и сбежавших агентов
+setInterval(checkCombat, 5000);                     // проверка боевого режима
+setInterval(() => {                                 // не даём списку банов расти бесконечно
+  const keys = Object.keys(bans);
+  if (keys.length > 8000) { keys.sort((a, b) => (bans[a].ts || 0) - (bans[b].ts || 0)).slice(0, keys.length - 6000).forEach(k => delete bans[k]); push('bans', bans); }
+}, 60000);
 setInterval(refreshBlocklist, 10800000);            // обновлять чёрный список вредоносных IP раз в 3 часа
 setInterval(refreshIntel, 1800000);                 // обновлять реальные фиды раз в 30 мин
 setInterval(dispatchReal, 11000);                   // раздавать реальную угрозу агенту каждые ~11 сек
